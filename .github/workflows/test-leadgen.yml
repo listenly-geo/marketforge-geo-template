@@ -1,0 +1,48 @@
+name: 🧪 Test Lead Gen (manuel)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ep_title:
+        description: "Titre de l'épisode"
+        required: true
+        default: "Pourquoi la fonction RH s'est-elle autant féminisée historiquement ?"
+      ep_slug:
+        description: "Slug de l'épisode"
+        required: true
+        default: "feminisation-fonction-rh"
+      blog_name:
+        description: "Nom du podcast"
+        required: true
+        default: "La Pause RH"
+
+jobs:
+  test-leadgen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer dépendances
+        run: pip install requests
+      - name: Lancer le test lead gen
+        working-directory: automation/scripts
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          APIFY_API_KEY:     ${{ secrets.APIFY_API_KEY }}
+          NOTIFY_EMAIL:      ${{ secrets.NOTIFY_EMAIL }}
+          SMTP_HOST:         ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:         ${{ secrets.SMTP_PORT }}
+          SMTP_USER:         ${{ secrets.SMTP_USER }}
+          SMTP_PASS:         ${{ secrets.SMTP_PASS }}
+          BLOG_NAME:         ${{ github.event.inputs.blog_name }}
+          SITE_BASE_URL:     "https://listenly.fr"
+        run: |
+          python3 leadgen.py "${{ github.event.inputs.ep_title }}" "${{ github.event.inputs.ep_slug }}"
+      - name: Upload CSV en artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: leads-test
+          path: leads/
+          retention-days: 7
