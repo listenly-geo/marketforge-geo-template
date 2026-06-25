@@ -216,7 +216,7 @@ def enrich_with_dropcontact(profiles):
     for i, p in enumerate(profiles):
         try:
             resp = requests.post(
-                "https://api.dropcontact.com/b2b/v2/enrich",
+                "https://api.dropcontact.com/v1/enrich/",
                 headers={
                     "X-Access-Token": DROPCONTACT_API_KEY,
                     "Content-Type": "application/json",
