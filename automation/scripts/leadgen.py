@@ -41,7 +41,7 @@ TARGET_PERSONA      = os.environ.get("TARGET_PERSONA", "")
 TARGET_LOCATION     = os.environ.get("TARGET_LOCATION", "France")
 
 ANTHROPIC_MODEL     = "claude-sonnet-4-6"
-APIFY_ACTOR         = "harvestapi~linkedin-post-search"
+APIFY_ACTOR         = "harvestapi~linkedin-profile-search"
 MAX_PROFILES        = 50
 LEADS_DIR           = "leads"
 
@@ -109,12 +109,9 @@ def scrape_linkedin_profiles(personas):
                 f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs?token={APIFY_API_KEY}",
                 headers={"Content-Type": "application/json"},
                 json={
-                    "searchQueries": [f"{persona} {TARGET_LOCATION}"],
-                    "maxPosts": MAX_PROFILES // len(personas),
-                    "profileScraperMode": "short",
-                    "scrapeComments": False,
-                    "scrapeReactions": False,
-                    "postedLimit": "month",
+                    "searchQuery": f"{persona} {TARGET_LOCATION}",
+                    "maxResults": MAX_PROFILES // len(personas),
+                    "scrapeType": "short",
                 },
                 timeout=30,
             )
