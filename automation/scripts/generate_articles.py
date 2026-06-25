@@ -24,6 +24,12 @@ from datetime import datetime, timezone
 from xml.etree import ElementTree as ET
 import requests
 
+try:
+    from leadgen import run_leadgen
+    LEADGEN_AVAILABLE = True
+except ImportError:
+    LEADGEN_AVAILABLE = False
+
 # ── Config ──────────────────────────────────────────────────────────────────
 OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -426,6 +432,14 @@ def main():
             log(f"  ✓ index.html")
 
             log(f"✓ Épisode complet : {ep_dir}/ ({len(article_files)} articles + index)")
+
+            # Passe 4 : Lead Gen automatique
+            if LEADGEN_AVAILABLE:
+                run_leadgen(
+                    ep_title=ep["title"],
+                    ep_slug=ep_slug,
+                    questions=questions_data.get("questions", []),
+                )
 
             reg["processed"][ep["guid"]] = {
                 "title": ep["title"],
