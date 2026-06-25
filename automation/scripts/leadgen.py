@@ -173,6 +173,8 @@ def scrape_linkedin_profiles(personas):
                     "email":        "",
                 })
 
+            if items:
+                log(f"    DEBUG premier item : {json.dumps(items[0], ensure_ascii=False)[:500]}")
             log(f"    {len(items)} profils récupérés")
             time.sleep(3)
 
