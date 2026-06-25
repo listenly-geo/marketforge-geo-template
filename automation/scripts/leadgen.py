@@ -226,7 +226,8 @@ def enrich_with_dropcontact(profiles):
                         "first_name": p["first_name"],
                         "last_name":  p["last_name"],
                         "company":    p.get("company", ""),
-                    }],
+                    }]
+                },
                 timeout=60,
             )
             log(f"  DC {resp.status_code}: {resp.text[:150]}")
