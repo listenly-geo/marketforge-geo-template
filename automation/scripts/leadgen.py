@@ -140,39 +140,6 @@ def scrape_linkedin_profiles(personas):
                 timeout=30,
             ).json()
 
-            for item in items:
-                # Extraire auteur du post
-                author = item.get("author") or {}
-                if isinstance(author, str):
-                    parts = author.strip().split(" ", 1)
-                    fname = parts[0] if parts else ""
-                    lname = parts[1] if len(parts) > 1 else ""
-                    company = ""
-                    headline = ""
-                    profile_url = item.get("authorUrl", "")
-                else:
-                    fname = author.get("firstName") or author.get("first_name", "")
-                    lname = author.get("lastName") or author.get("last_name", "")
-                    company = author.get("companyName") or author.get("company", "")
-                    headline = author.get("headline", "")
-                    profile_url = author.get("profileUrl") or author.get("url", "") or item.get("authorUrl", "")
-
-                if not fname or not lname:
-                    continue
-                key = f"{fname}|{lname}|{company}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                all_profiles.append({
-                    "first_name":   fname,
-                    "last_name":    lname,
-                    "company":      company,
-                    "headline":     headline,
-                    "profile_url":  profile_url,
-                    "persona":      persona,
-                    "email":        "",
-                })
-
             log(f"    {len(items)} profils récupérés")
             for item in items:
                 fname = item.get("firstName", "")
