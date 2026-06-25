@@ -2,46 +2,52 @@
 # -*- coding: utf-8 -*-
 """
 MarketForge GEO — Lead Gen automatique post-génération d'articles.
+Version 2 : LinkedIn posts → Dropcontact → email signé Etienne/Listenly
 
 Flux :
-  1. Reçoit les données de l'épisode traité (titre, questions, slug)
-  2. Claude extrait le sujet métier + 3 titres de poste cibles
-  3. Apify scrape Indeed France sur ces postes
-  4. Filtre les offres avec email public
-  5. Claude génère un email signé Etienne/Listenly par offre
+  1. Claude extrait mots-clés LinkedIn depuis les questions de l'épisode
+  2. Apify scrape posts LinkedIn publics sur ces mots-clés
+  3. Extrait commentateurs (Prénom + Nom + Entreprise)
+  4. Dropcontact API → email pro vérifié
+  5. Claude génère email signé Etienne/Listenly par contact
   6. Sauvegarde CSV dans leads/{ep_slug}/leads_YYYYMMDD.csv
-  7. Envoie une notif email récap via SMTP
+  7. Notif email récap
 
-Variables d'environnement requises :
+Variables d'environnement :
   ANTHROPIC_API_KEY
   APIFY_API_KEY
-  NOTIFY_EMAIL        — destinataire de la notif (ex: etienne@listenly.fr)
-  SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS  — pour l'envoi de notif
-  SITE_BASE_URL       — pour construire les liens articles
-  BLOG_NAME           — nom du podcast client
+  DROPCONTACT_API_KEY   (optionnel — enrichissement email)
+  NOTIFY_EMAIL
+  SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS
+  SITE_BASE_URL
+  BLOG_NAME
 """
 
 import os, re, json, csv, time, smtplib
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 import requests
 
 # ── Config ───────────────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-APIFY_API_KEY     = os.environ.get("APIFY_API_KEY", "")
-NOTIFY_EMAIL      = os.environ.get("NOTIFY_EMAIL", "")
-SMTP_HOST         = os.environ.get("SMTP_HOST", "")
-SMTP_PORT         = int(os.environ.get("SMTP_PORT") or "587")
-SMTP_USER         = os.environ.get("SMTP_USER", "")
-SMTP_PASS         = os.environ.get("SMTP_PASS", "")
-SITE_BASE_URL     = os.environ.get("SITE_BASE_URL", "").rstrip("/")
-BLOG_NAME         = os.environ.get("BLOG_NAME", "Notre Podcast")
+ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
+APIFY_API_KEY        = os.environ.get("APIFY_API_KEY", "")
+DROPCONTACT_API_KEY  = os.environ.get("DROPCONTACT_API_KEY", "")
+NOTIFY_EMAIL         = os.environ.get("NOTIFY_EMAIL", "")
+SMTP_HOST            = os.environ.get("SMTP_HOST", "")
+SMTP_PORT            = int(os.environ.get("SMTP_PORT") or "587")
+SMTP_USER            = os.environ.get("SMTP_USER", "")
+SMTP_PASS            = os.environ.get("SMTP_PASS", "")
+SITE_BASE_URL        = os.environ.get("SITE_BASE_URL", "").rstrip("/")
+BLOG_NAME            = os.environ.get("BLOG_NAME", "Notre Podcast")
 
-ANTHROPIC_MODEL   = "claude-sonnet-4-6"
-APIFY_ACTOR       = "misceres/indeed-scraper"
-MAX_JOBS          = 50   # offres max à scraper par run
-LEADS_DIR         = "leads"
+ANTHROPIC_MODEL      = "claude-sonnet-4-6"
+APIFY_ACTOR_LINKEDIN = "apimaestro/linkedin-posts-search-scraper-no-cookies"
+MAX_POSTS            = 20   # posts LinkedIn à scraper
+MAX_COMMENTERS       = 50   # commentateurs max à extraire
+LEADS_DIR            = "leads"
 
 
 def log(msg):
@@ -49,7 +55,7 @@ def log(msg):
 
 
 # ── Claude helper ─────────────────────────────────────────────────────────────
-def claude(prompt, max_tokens=2000):
+def claude(prompt, max_tokens=1000):
     resp = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -69,143 +75,262 @@ def claude(prompt, max_tokens=2000):
     return resp.json()["content"][0]["text"]
 
 
-# ── Étape 1 : extraire sujet + postes cibles ─────────────────────────────────
-def extract_targets(ep_title, questions):
-    """
-    À partir du titre d'épisode et des questions générées,
-    Claude identifie le sujet métier et 3 titres de poste cibles.
-    """
-    log("Étape 1 — Extraction sujet + postes cibles...")
+# ── Étape 1 : extraire mots-clés LinkedIn + persona ──────────────────────────
+def extract_linkedin_keywords(ep_title, questions):
+    log("Étape 1 — Extraction mots-clés LinkedIn + persona cible...")
     questions_txt = "\n".join(f"- {q['question']}" for q in questions[:10])
-    prompt = f"""Tu analyses un épisode de podcast B2B pour identifier qui devrait recevoir une recommandation de cet épisode.
+
+    prompt = f"""Tu analyses un épisode de podcast B2B pour identifier comment trouver son audience sur LinkedIn.
 
 Podcast : {BLOG_NAME}
 Titre épisode : {ep_title}
-Questions traitées dans l'épisode :
+Questions traitées :
 {questions_txt}
 
 Identifie :
-1. Le sujet métier en 1 phrase courte (ex: "la féminisation de la fonction RH")
-2. L'angle utile pour un professionnel (ex: "comprendre pourquoi la fonction RH manque de légitimité stratégique")
-3. 3 titres de poste en français qu'on trouve sur Indeed, dont les personnes bénéficieraient directement de cet épisode
+1. Le sujet métier en 1 phrase courte
+2. L'angle utile pour un professionnel (pourquoi cet épisode les intéresse)
+3. 3 mots-clés ou expressions à rechercher sur LinkedIn pour trouver des posts publics sur ce sujet (en français, courts, comme on les tape dans la recherche LinkedIn)
+4. Le persona cible : titre de poste typique de la personne concernée
 
 Réponds UNIQUEMENT en JSON valide, sans markdown :
 {{
   "sujet": "...",
   "angle": "...",
-  "postes": ["Poste 1", "Poste 2", "Poste 3"]
+  "keywords": ["mot-clé 1", "mot-clé 2", "mot-clé 3"],
+  "persona": "ex: Responsable RH, DRH, Directeur Marketing..."
 }}"""
 
-    raw = claude(prompt, max_tokens=500)
+    raw = claude(prompt, max_tokens=400)
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     raw = re.sub(r"\s*```$", "", raw)
     return json.loads(raw)
 
 
-# ── Étape 2 : scrape Indeed via Apify ────────────────────────────────────────
-def scrape_indeed(postes):
-    """
-    Lance un run Apify misceres/indeed-scraper sur les postes cibles.
-    Retourne la liste des offres avec email public si disponible.
-    """
-    log(f"Étape 2 — Scraping Indeed pour : {', '.join(postes)}...")
+# ── Étape 2 : scrape LinkedIn posts via Apify ─────────────────────────────────
+def scrape_linkedin_posts(keywords):
+    log(f"Étape 2 — Scraping LinkedIn posts pour : {', '.join(keywords)}...")
 
-    # Lancer le run
-    run_resp = requests.post(
-        f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs?token={APIFY_API_KEY}",
-        headers={"Content-Type": "application/json"},
-        json={
-            "position": " OR ".join(f'"{p}"' for p in postes),
-            "country": "FR",
-            "location": "France",
-            "maxItems": MAX_JOBS,
-            "parseCompanyDetails": False,
-            "saveOnlyUniqueItems": True,
-            "followApplyRedirects": False,
-        },
-        timeout=30,
-    )
-    run_resp.raise_for_status()
-    run_id = run_resp.json()["data"]["id"]
-    log(f"  Run Apify lancé : {run_id}")
+    # On scrape chaque keyword séparément et on fusionne
+    all_posts = []
+    for keyword in keywords:
+        log(f"  Keyword : {keyword}")
+        try:
+            run_resp = requests.post(
+                f"https://api.apify.com/v2/acts/{APIFY_ACTOR_LINKEDIN}/runs?token={APIFY_API_KEY}",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "keywords": [keyword],
+                    "maxResults": MAX_POSTS,
+                    "proxyConfiguration": {"useApifyProxy": True},
+                },
+                timeout=30,
+            )
+            run_resp.raise_for_status()
+            run_id = run_resp.json()["data"]["id"]
+            log(f"    Run Apify : {run_id}")
 
-    # Polling jusqu'à SUCCEEDED
-    for attempt in range(40):
-        time.sleep(8)
-        status_resp = requests.get(
-            f"https://api.apify.com/v2/actor-runs/{run_id}?token={APIFY_API_KEY}",
-            timeout=15,
-        )
-        status = status_resp.json()["data"]["status"]
-        log(f"  Statut run : {status} (tentative {attempt+1})")
-        if status == "SUCCEEDED":
+            # Polling
+            for attempt in range(30):
+                time.sleep(8)
+                status_resp = requests.get(
+                    f"https://api.apify.com/v2/actor-runs/{run_id}?token={APIFY_API_KEY}",
+                    timeout=15,
+                )
+                status = status_resp.json()["data"]["status"]
+                if status == "SUCCEEDED":
+                    break
+                elif status in ("FAILED", "ABORTED", "TIMED-OUT"):
+                    log(f"    Run échoué : {status}")
+                    break
+
+            # Résultats
+            items_resp = requests.get(
+                f"https://api.apify.com/v2/actor-runs/{run_id}/dataset/items?token={APIFY_API_KEY}&limit={MAX_POSTS}",
+                timeout=30,
+            )
+            posts = items_resp.json()
+            log(f"    {len(posts)} posts récupérés")
+            all_posts.extend(posts)
+            time.sleep(3)
+
+        except Exception as e:
+            log(f"    Erreur keyword '{keyword}' : {e}")
+
+    log(f"  Total : {len(all_posts)} posts LinkedIn récupérés")
+    return all_posts
+
+
+# ── Étape 3 : extraire commentateurs ─────────────────────────────────────────
+def extract_commenters(posts):
+    """
+    Extrait les auteurs des posts + commentateurs uniques.
+    Retourne liste de {first_name, last_name, company, profile_url}
+    """
+    log("Étape 3 — Extraction des commentateurs...")
+    seen = set()
+    contacts = []
+
+    for post in posts:
+        # Auteur du post
+        author = post.get("author") or post.get("authorName") or {}
+        if isinstance(author, dict):
+            fname = author.get("firstName") or author.get("first_name", "")
+            lname = author.get("lastName") or author.get("last_name", "")
+            company = author.get("companyName") or author.get("company", "")
+            profile = author.get("profileUrl") or author.get("url", "")
+        elif isinstance(author, str):
+            parts = author.strip().split(" ", 1)
+            fname = parts[0] if parts else ""
+            lname = parts[1] if len(parts) > 1 else ""
+            company = ""
+            profile = post.get("authorUrl", "")
+
+        if fname and lname:
+            key = f"{fname}|{lname}|{company}"
+            if key not in seen:
+                seen.add(key)
+                contacts.append({
+                    "first_name": fname,
+                    "last_name":  lname,
+                    "company":    company,
+                    "profile_url": profile,
+                    "source":     "post_author",
+                })
+
+        # Commentateurs si disponibles
+        for comment in post.get("comments", []) or []:
+            commenter = comment.get("author") or comment.get("commenterName") or {}
+            if isinstance(commenter, dict):
+                fname = commenter.get("firstName") or commenter.get("first_name", "")
+                lname = commenter.get("lastName") or commenter.get("last_name", "")
+                company = commenter.get("companyName") or commenter.get("company", "")
+                profile = commenter.get("profileUrl") or ""
+            elif isinstance(commenter, str):
+                parts = commenter.strip().split(" ", 1)
+                fname = parts[0] if parts else ""
+                lname = parts[1] if len(parts) > 1 else ""
+                company = ""
+                profile = ""
+
+            if fname and lname:
+                key = f"{fname}|{lname}|{company}"
+                if key not in seen:
+                    seen.add(key)
+                    contacts.append({
+                        "first_name": fname,
+                        "last_name":  lname,
+                        "company":    company,
+                        "profile_url": profile,
+                        "source":     "commenter",
+                    })
+
+        if len(contacts) >= MAX_COMMENTERS:
             break
-        elif status in ("FAILED", "ABORTED", "TIMED-OUT"):
-            raise RuntimeError(f"Run Apify échoué : {status}")
 
-    # Récupérer les résultats
-    items_resp = requests.get(
-        f"https://api.apify.com/v2/actor-runs/{run_id}/dataset/items?token={APIFY_API_KEY}&limit={MAX_JOBS}",
-        timeout=30,
-    )
-    items = items_resp.json()
-    log(f"  {len(items)} offres récupérées")
+    log(f"  {len(contacts)} contacts uniques extraits")
+    return contacts[:MAX_COMMENTERS]
 
-    # Filtrer : garder uniquement celles avec email public OU conserver toutes
-    # (Indeed expose rarement les emails — on garde tout pour la génération email)
-    jobs = []
-    for item in items:
-        if not item.get("company") or not item.get("positionName"):
+
+# ── Étape 4 : enrichissement Dropcontact ─────────────────────────────────────
+def enrich_with_dropcontact(contacts):
+    if not DROPCONTACT_API_KEY:
+        log("Étape 4 — Dropcontact ignoré (clé manquante)")
+        return contacts
+
+    log(f"Étape 4 — Enrichissement Dropcontact ({len(contacts)} contacts)...")
+    enriched = []
+
+    for i, contact in enumerate(contacts):
+        if not contact.get("first_name") or not contact.get("last_name"):
+            enriched.append(contact)
             continue
-        jobs.append({
-            "company":      item.get("company", ""),
-            "position":     item.get("positionName", ""),
-            "location":     item.get("location", ""),
-            "job_url":      item.get("externalApplyLink") or item.get("url", ""),
-            "email":        item.get("companyEmail", "") or "",  # si dispo
-            "description":  (item.get("description", "") or "")[:500],
-        })
 
-    log(f"  {len(jobs)} offres valides après filtre")
-    return jobs
+        try:
+            resp = requests.post(
+                "https://api.dropcontact.com/v1/enrich/",
+                headers={
+                    "X-Access-Token": DROPCONTACT_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "data": [{
+                        "first_name": contact["first_name"],
+                        "last_name":  contact["last_name"],
+                        "company":    contact.get("company", ""),
+                    }],
+                    "siren": False,
+                },
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                data = result.get("data", [{}])[0] if result.get("data") else {}
+                email = ""
+                for email_entry in data.get("email", []):
+                    if isinstance(email_entry, dict) and email_entry.get("email"):
+                        email = email_entry["email"]
+                        break
+                    elif isinstance(email_entry, str):
+                        email = email_entry
+                        break
+                contact["email"] = email
+                if email:
+                    log(f"  ✓ {contact['first_name']} {contact['last_name']} → {email}")
+                else:
+                    log(f"  - {contact['first_name']} {contact['last_name']} → pas d'email")
+            else:
+                log(f"  Dropcontact erreur {resp.status_code}")
+                contact["email"] = ""
+
+        except Exception as e:
+            log(f"  Erreur Dropcontact pour {contact.get('first_name')} : {e}")
+            contact["email"] = ""
+
+        enriched.append(contact)
+        time.sleep(1.5)  # respect rate limit
+
+    emails_found = sum(1 for c in enriched if c.get("email"))
+    log(f"  {emails_found}/{len(enriched)} emails trouvés")
+    return enriched
 
 
-# ── Étape 3 : générer les emails ─────────────────────────────────────────────
-def generate_emails(jobs, ep_title, ep_slug, targets):
-    """
-    Pour chaque offre, Claude génère un email court signé Etienne/Listenly.
-    Retourne la liste des leads enrichis.
-    """
-    log(f"Étape 3 — Génération de {len(jobs)} emails...")
-
-    # URL de l'article index pour cet épisode
+# ── Étape 5 : générer les emails ─────────────────────────────────────────────
+def generate_emails(contacts, ep_title, ep_slug, targets):
+    log(f"Étape 5 — Génération de {len(contacts)} emails...")
     article_url = f"{SITE_BASE_URL}/fiche-geo-ia/{ep_slug}/index.html" if SITE_BASE_URL else f"https://listenly.fr/fiche-geo-ia/{ep_slug}/"
 
     leads = []
-    for i, job in enumerate(jobs):
-        log(f"  Email {i+1}/{len(jobs)} — {job['company']} ({job['position']})")
+    for i, contact in enumerate(contacts):
+        fname = contact.get("first_name", "")
+        lname = contact.get("last_name", "")
+        company = contact.get("company", "")
+        email = contact.get("email", "")
+
+        log(f"  Email {i+1}/{len(contacts)} — {fname} {lname} ({company})")
 
         prompt = f"""Tu es Etienne, fondateur de Listenly (listenly.fr), l'annuaire de référence des podcasts B2B français.
 Tu envoies un email court et naturel — une recommandation éditoriale, pas un pitch commercial.
 
 Contexte :
-- Entreprise : {job['company']}
-- Poste recruté / profil : {job['position']}
-- Localisation : {job['location']}
+- Destinataire : {fname} {lname}{f' chez {company}' if company else ''}
 - Podcast recommandé : {BLOG_NAME}
 - Sujet de l'épisode : {targets['sujet']}
 - Angle utile : {targets['angle']}
 - Lien fiche Listenly : {article_url}
+- Persona cible : {targets.get('persona', 'professionnel')}
 
 Rédige un email en français, 5-6 lignes maximum :
-- Ton : naturel, comme si tu envoyais un lien à un collègue
-- Pas de "pitch", "offre", "solution", "ROI"
+- Commence par "Bonjour {fname},"
+- Ton naturel, comme si tu envoyais un lien à un collègue
 - Mentionne que tu diriges Listenly, l'annuaire des podcasts B2B
-- Cite le sujet de l'épisode en lien avec leur contexte métier
-- Termine par une question ouverte courte (1 ligne)
+- Cite le sujet de l'épisode en lien avec leur profil
+- Lien vers la fiche
+- Termine par une question ouverte courte
 - Signature : Etienne — Listenly.fr
+- Jamais de "pitch", "offre", "solution", "ROI"
 
-Format EXACT (respecter les séparateurs) :
+Format EXACT :
 OBJET: [sujet accrocheur 1 ligne]
 ---
 [corps de l'email]"""
@@ -226,25 +351,28 @@ OBJET: [sujet accrocheur 1 ligne]
             body = "\n".join(body_lines).strip()
 
             leads.append({
-                **job,
-                "email_subject": subject,
-                "email_body":    body,
-                "article_url":   article_url,
-                "sujet":         targets["sujet"],
-                "ep_title":      ep_title,
-                "generated_at":  datetime.now(timezone.utc).isoformat(),
+                "first_name":     fname,
+                "last_name":      lname,
+                "company":        company,
+                "email":          email,
+                "profile_url":    contact.get("profile_url", ""),
+                "source":         contact.get("source", ""),
+                "email_subject":  subject,
+                "email_body":     body,
+                "article_url":    article_url,
+                "sujet":          targets["sujet"],
+                "ep_title":       ep_title,
+                "generated_at":   datetime.now(timezone.utc).isoformat(),
             })
         except Exception as e:
-            log(f"  ✗ Erreur génération email pour {job['company']}: {e}")
-            leads.append({**job, "email_subject": "", "email_body": "", "article_url": article_url})
+            log(f"  ✗ Erreur email {fname} {lname} : {e}")
 
-        # Pause légère pour éviter rate limit
         time.sleep(1)
 
     return leads
 
 
-# ── Étape 4 : sauvegarder CSV ─────────────────────────────────────────────────
+# ── Étape 6 : sauvegarder CSV ─────────────────────────────────────────────────
 def save_leads_csv(leads, ep_slug):
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
     out_dir = os.path.join(LEADS_DIR, ep_slug)
@@ -252,8 +380,8 @@ def save_leads_csv(leads, ep_slug):
     csv_path = os.path.join(out_dir, f"leads_{today}.csv")
 
     fieldnames = [
-        "company", "position", "location", "email",
-        "job_url", "email_subject", "email_body", "article_url",
+        "first_name", "last_name", "company", "email", "profile_url",
+        "source", "email_subject", "email_body", "article_url",
         "sujet", "ep_title", "generated_at",
     ]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -265,7 +393,7 @@ def save_leads_csv(leads, ep_slug):
     return csv_path
 
 
-# ── Étape 5 : notif email ─────────────────────────────────────────────────────
+# ── Étape 7 : notif email ─────────────────────────────────────────────────────
 def send_notification(ep_title, ep_slug, leads, csv_path):
     if not all([NOTIFY_EMAIL, SMTP_HOST, SMTP_USER, SMTP_PASS]):
         log("Notif email ignorée (variables SMTP manquantes)")
@@ -275,24 +403,28 @@ def send_notification(ep_title, ep_slug, leads, csv_path):
     leads_with_email = [l for l in leads if l.get("email")]
     leads_with_body  = [l for l in leads if l.get("email_body")]
 
-    # Construire le récap HTML
     sample_rows = ""
     for lead in leads_with_body[:5]:
         gmail_url = (
             f"https://mail.google.com/mail/?view=cm&fs=1"
-            f"&su={requests.utils.quote(lead['email_subject'])}"
+            f"&su={requests.utils.quote(lead.get('email_subject',''))}"
             f"&to={requests.utils.quote(lead.get('email',''))}"
-            f"&body={requests.utils.quote(lead['email_body'])}"
+            f"&body={requests.utils.quote(lead.get('email_body',''))}"
         )
         sample_rows += f"""
         <tr>
-          <td style="padding:8px;border-bottom:1px solid #eee"><strong>{lead['company']}</strong><br>
-              <small style="color:#666">{lead['position']} · {lead['location']}</small></td>
           <td style="padding:8px;border-bottom:1px solid #eee">
-              <em style="color:#444">{lead['email_subject']}</em><br>
-              <small style="color:#888">{lead['email_body'][:120]}...</small></td>
+            <strong>{lead['first_name']} {lead['last_name']}</strong><br>
+            <small style="color:#666">{lead.get('company','')}</small>
+          </td>
+          <td style="padding:8px;border-bottom:1px solid #eee">
+            <small style="color:#444">{lead.get('email','—')}</small><br>
+            <em style="color:#888;font-size:12px">{lead.get('email_subject','')}</em>
+          </td>
           <td style="padding:8px;border-bottom:1px solid #eee;text-align:center">
-              <a href="{gmail_url}" style="background:#0E2A47;color:white;padding:6px 12px;border-radius:4px;text-decoration:none;font-size:12px">Ouvrir Gmail</a>
+            <a href="{gmail_url}" style="background:#0E2A47;color:white;padding:6px 12px;border-radius:4px;text-decoration:none;font-size:12px">
+              Ouvrir Gmail
+            </a>
           </td>
         </tr>"""
 
@@ -300,15 +432,15 @@ def send_notification(ep_title, ep_slug, leads, csv_path):
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto">
       <div style="background:#0E2A47;padding:20px 24px;border-radius:8px 8px 0 0">
         <h1 style="color:white;margin:0;font-size:20px">🎙 Listenly Lead Gen</h1>
-        <p style="color:#D8A53C;margin:4px 0 0;font-size:14px">Nouvel épisode traité → leads générés</p>
+        <p style="color:#D8A53C;margin:4px 0 0;font-size:14px">{BLOG_NAME} — nouvel épisode traité</p>
       </div>
       <div style="background:#f9f9f9;padding:20px 24px;border:1px solid #eee">
         <p><strong>Épisode :</strong> {ep_title}</p>
-        <p><strong>Article Listenly :</strong> <a href="{article_url}">{article_url}</a></p>
-        <table style="width:100%;border-collapse:collapse;margin-top:8px">
+        <p><strong>Fiche Listenly :</strong> <a href="{article_url}">{article_url}</a></p>
+        <table style="width:100%;border-collapse:collapse;margin:12px 0">
           <tr style="background:#eee">
-            <td style="padding:6px 8px;font-size:12px;font-weight:bold">LEADS TOTAL</td>
-            <td style="padding:6px 8px;font-size:12px;font-weight:bold">AVEC EMAIL</td>
+            <td style="padding:6px 8px;font-size:12px;font-weight:bold">CONTACTS</td>
+            <td style="padding:6px 8px;font-size:12px;font-weight:bold">EMAILS TROUVÉS</td>
             <td style="padding:6px 8px;font-size:12px;font-weight:bold">EMAILS RÉDIGÉS</td>
           </tr>
           <tr>
@@ -317,11 +449,11 @@ def send_notification(ep_title, ep_slug, leads, csv_path):
             <td style="padding:8px;font-size:22px;font-weight:bold;color:#2e7d32">{len(leads_with_body)}</td>
           </tr>
         </table>
-        <h2 style="font-size:15px;margin-top:20px">5 premiers leads — prêts à envoyer</h2>
+        <h2 style="font-size:15px;margin-top:20px">5 premiers leads</h2>
         <table style="width:100%;border-collapse:collapse">
           <tr style="background:#f0f0f0">
-            <td style="padding:8px;font-size:12px;font-weight:bold">Entreprise</td>
-            <td style="padding:8px;font-size:12px;font-weight:bold">Email prérédigé</td>
+            <td style="padding:8px;font-size:12px;font-weight:bold">Contact</td>
+            <td style="padding:8px;font-size:12px;font-weight:bold">Email</td>
             <td style="padding:8px;font-size:12px;font-weight:bold">Action</td>
           </tr>
           {sample_rows}
@@ -331,20 +463,17 @@ def send_notification(ep_title, ep_slug, leads, csv_path):
         </p>
       </div>
       <div style="background:#0E2A47;padding:12px 24px;border-radius:0 0 8px 8px;text-align:center">
-        <p style="color:#aaa;margin:0;font-size:12px">Listenly.fr · MarketForge GEO Lead Gen · automatique</p>
+        <p style="color:#aaa;margin:0;font-size:12px">Listenly.fr · MarketForge GEO Lead Gen</p>
       </div>
     </div>"""
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🎙 {len(leads_with_body)} leads générés — {ep_title[:50]}"
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = f"🎙 {len(leads_with_body)} leads — {ep_title[:50]}"
     msg["From"]    = SMTP_USER
     msg["To"]      = NOTIFY_EMAIL
     msg.attach(MIMEText(html_body, "html"))
 
-    # Joindre le CSV
     with open(csv_path, "rb") as f:
-        from email.mime.base import MIMEBase
-        from email import encoders
         part = MIMEBase("text", "csv")
         part.set_payload(f.read())
         encoders.encode_base64(part)
@@ -356,17 +485,13 @@ def send_notification(ep_title, ep_slug, leads, csv_path):
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
             server.send_message(msg)
-        log(f"Notif email envoyée à {NOTIFY_EMAIL}")
+        log(f"Notif envoyée à {NOTIFY_EMAIL}")
     except Exception as e:
-        log(f"Erreur envoi notif email : {e}")
+        log(f"Erreur notif email : {e}")
 
 
 # ── Point d'entrée principal ──────────────────────────────────────────────────
 def run_leadgen(ep_title, ep_slug, questions):
-    """
-    Appelé depuis generate_articles.py après chaque épisode traité.
-    questions = liste de dicts {question, slug, angle, reponse_brute, ...}
-    """
     if not APIFY_API_KEY:
         log("APIFY_API_KEY manquante — lead gen ignoré")
         return
@@ -374,26 +499,36 @@ def run_leadgen(ep_title, ep_slug, questions):
         log("ANTHROPIC_API_KEY manquante — lead gen ignoré")
         return
 
-    log(f"=== Lead Gen démarré pour : {ep_title} ===")
+    log(f"=== Lead Gen v2 démarré : {ep_title} ===")
     try:
-        # 1. Extraire sujet + postes cibles
-        targets = extract_targets(ep_title, questions)
+        # 1. Mots-clés LinkedIn
+        targets = extract_linkedin_keywords(ep_title, questions)
         log(f"  Sujet : {targets['sujet']}")
-        log(f"  Postes cibles : {', '.join(targets['postes'])}")
+        log(f"  Keywords : {', '.join(targets['keywords'])}")
+        log(f"  Persona : {targets.get('persona','')}")
 
-        # 2. Scraper Indeed
-        jobs = scrape_indeed(targets["postes"])
-        if not jobs:
-            log("Aucune offre trouvée — lead gen terminé sans résultat")
+        # 2. Scrape LinkedIn posts
+        posts = scrape_linkedin_posts(targets["keywords"])
+        if not posts:
+            log("Aucun post LinkedIn trouvé")
             return
 
-        # 3. Générer les emails
-        leads = generate_emails(jobs, ep_title, ep_slug, targets)
+        # 3. Extraire commentateurs
+        contacts = extract_commenters(posts)
+        if not contacts:
+            log("Aucun contact extrait")
+            return
 
-        # 4. Sauvegarder CSV
+        # 4. Enrichissement Dropcontact
+        contacts = enrich_with_dropcontact(contacts)
+
+        # 5. Générer emails
+        leads = generate_emails(contacts, ep_title, ep_slug, targets)
+
+        # 6. CSV
         csv_path = save_leads_csv(leads, ep_slug)
 
-        # 5. Notif email
+        # 7. Notif
         send_notification(ep_title, ep_slug, leads, csv_path)
 
         log(f"=== Lead Gen terminé : {len(leads)} leads → {csv_path} ===")
@@ -404,7 +539,6 @@ def run_leadgen(ep_title, ep_slug, questions):
 
 
 if __name__ == "__main__":
-    # Test standalone
     import sys
     if len(sys.argv) >= 3:
         run_leadgen(
