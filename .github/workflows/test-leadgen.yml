@@ -29,16 +29,17 @@ jobs:
       - name: Lancer le test lead gen
         working-directory: automation/scripts
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          APIFY_API_KEY:     ${{ secrets.APIFY_API_KEY }}
-          NOTIFY_EMAIL:      ${{ secrets.NOTIFY_EMAIL }}
-          SMTP_HOST:         ${{ secrets.SMTP_HOST }}
-          SMTP_PORT:         ${{ secrets.SMTP_PORT }}
-          SMTP_USER:         ${{ secrets.SMTP_USER }}
-          SMTP_PASS:         ${{ secrets.SMTP_PASS }}
-          BLOG_NAME:         ${{ github.event.inputs.blog_name }}
-          SITE_BASE_URL:     "https://listenly.fr"
-        TARGET_PERSONA:    ${{ secrets.TARGET_PERSONA }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          APIFY_API_KEY:        ${{ secrets.APIFY_API_KEY }}
+          NOTIFY_EMAIL:         ${{ secrets.NOTIFY_EMAIL }}
+          SMTP_HOST:            ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:            ${{ secrets.SMTP_PORT }}
+          SMTP_USER:            ${{ secrets.SMTP_USER }}
+          SMTP_PASS:            ${{ secrets.SMTP_PASS }}
+          DROPCONTACT_API_KEY:  ${{ secrets.DROPCONTACT_API_KEY }}
+          TARGET_PERSONA:       ${{ secrets.TARGET_PERSONA }}
+          BLOG_NAME:            ${{ github.event.inputs.blog_name }}
+          SITE_BASE_URL:        "https://listenly.fr"
         run: |
           python3 leadgen.py "${{ github.event.inputs.ep_title }}" "${{ github.event.inputs.ep_slug }}"
       - name: Upload CSV en artifact
