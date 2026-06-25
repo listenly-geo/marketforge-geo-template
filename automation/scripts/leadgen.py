@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MarketForge GEO — Lead Gen automatique post-génération d'articles.
-Version 2 : LinkedIn posts → Dropcontact → email signé Etienne/Listenly
+MarketForge GEO — Lead Gen v3
+Logique : scrape profils LinkedIn par TARGET_PERSONA défini au setup client
+          → Dropcontact enrichissement email
+          → Claude génère email signé Etienne/Listenly
 
-Flux :
-  1. Claude extrait mots-clés LinkedIn depuis les questions de l'épisode
-  2. Apify scrape posts LinkedIn publics sur ces mots-clés
-  3. Extrait commentateurs (Prénom + Nom + Entreprise)
-  4. Dropcontact API → email pro vérifié
-  5. Claude génère email signé Etienne/Listenly par contact
-  6. Sauvegarde CSV dans leads/{ep_slug}/leads_YYYYMMDD.csv
-  7. Notif email récap
-
-Variables d'environnement :
+Secrets GitHub à configurer au setup de chaque fork client :
   ANTHROPIC_API_KEY
   APIFY_API_KEY
-  DROPCONTACT_API_KEY   (optionnel — enrichissement email)
+  DROPCONTACT_API_KEY   (optionnel)
   NOTIFY_EMAIL
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS
   SITE_BASE_URL
   BLOG_NAME
+  TARGET_PERSONA        → ex: "DRH, Responsable RH, Chargée RH"
+  TARGET_LOCATION       → ex: "France" (défaut: France)
 """
 
 import os, re, json, csv, time, smtplib
@@ -32,30 +27,30 @@ from email import encoders
 import requests
 
 # ── Config ───────────────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
-APIFY_API_KEY        = os.environ.get("APIFY_API_KEY", "")
-DROPCONTACT_API_KEY  = os.environ.get("DROPCONTACT_API_KEY", "")
-NOTIFY_EMAIL         = os.environ.get("NOTIFY_EMAIL", "")
-SMTP_HOST            = os.environ.get("SMTP_HOST", "")
-SMTP_PORT            = int(os.environ.get("SMTP_PORT") or "587")
-SMTP_USER            = os.environ.get("SMTP_USER", "")
-SMTP_PASS            = os.environ.get("SMTP_PASS", "")
-SITE_BASE_URL        = os.environ.get("SITE_BASE_URL", "").rstrip("/")
-BLOG_NAME            = os.environ.get("BLOG_NAME", "Notre Podcast")
+ANTHROPIC_API_KEY   = os.environ.get("ANTHROPIC_API_KEY", "")
+APIFY_API_KEY       = os.environ.get("APIFY_API_KEY", "")
+DROPCONTACT_API_KEY = os.environ.get("DROPCONTACT_API_KEY", "")
+NOTIFY_EMAIL        = os.environ.get("NOTIFY_EMAIL", "")
+SMTP_HOST           = os.environ.get("SMTP_HOST", "")
+SMTP_PORT           = int(os.environ.get("SMTP_PORT") or "587")
+SMTP_USER           = os.environ.get("SMTP_USER", "")
+SMTP_PASS           = os.environ.get("SMTP_PASS", "")
+SITE_BASE_URL       = os.environ.get("SITE_BASE_URL", "").rstrip("/")
+BLOG_NAME           = os.environ.get("BLOG_NAME", "Notre Podcast")
+TARGET_PERSONA      = os.environ.get("TARGET_PERSONA", "")
+TARGET_LOCATION     = os.environ.get("TARGET_LOCATION", "France")
 
-ANTHROPIC_MODEL      = "claude-sonnet-4-6"
-APIFY_ACTOR_LINKEDIN = "harvestapi~linkedin-post-search"
-MAX_POSTS            = 20   # posts LinkedIn à scraper
-MAX_COMMENTERS       = 50   # commentateurs max à extraire
-LEADS_DIR            = "leads"
+ANTHROPIC_MODEL     = "claude-sonnet-4-6"
+APIFY_ACTOR         = "harvestapi~linkedin-profile-search"
+MAX_PROFILES        = 50
+LEADS_DIR           = "leads"
 
 
 def log(msg):
     print(f"[leadgen] {msg}", flush=True)
 
 
-# ── Claude helper ─────────────────────────────────────────────────────────────
-def claude(prompt, max_tokens=1000):
+def claude(prompt, max_tokens=800):
     resp = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -68,185 +63,123 @@ def claude(prompt, max_tokens=1000):
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         },
-        timeout=120,
+        timeout=60,
     )
     if resp.status_code != 200:
         raise RuntimeError(f"Claude erreur {resp.status_code}: {resp.text[:300]}")
     return resp.json()["content"][0]["text"]
 
 
-# ── Étape 1 : extraire mots-clés LinkedIn + persona ──────────────────────────
-def extract_linkedin_keywords(ep_title, questions):
-    log("Étape 1 — Extraction mots-clés LinkedIn + persona cible...")
-    questions_txt = "\n".join(f"- {q['question']}" for q in questions[:10])
-
-    prompt = f"""Tu analyses un épisode de podcast B2B pour identifier comment trouver son audience sur LinkedIn.
-
-Podcast : {BLOG_NAME}
-Titre épisode : {ep_title}
+# ── Étape 1 : contexte épisode ────────────────────────────────────────────────
+def extract_episode_context(ep_title, questions):
+    log("Étape 1 — Contexte épisode...")
+    questions_txt = "\n".join(f"- {q['question']}" for q in questions[:7])
+    prompt = f"""Podcast : {BLOG_NAME}
+Épisode : {ep_title}
 Questions traitées :
 {questions_txt}
 
-Identifie :
-1. Le sujet métier en 1 phrase courte
-2. L'angle utile pour un professionnel (pourquoi cet épisode les intéresse)
-3. 3 mots-clés ou expressions à rechercher sur LinkedIn pour trouver des posts publics sur ce sujet (en français, courts, comme on les tape dans la recherche LinkedIn)
-4. Le persona cible : titre de poste typique de la personne concernée
+En 2 phrases max :
+1. Le sujet de l'épisode (1 phrase)
+2. Pourquoi c'est utile pour : {TARGET_PERSONA} (1 phrase)
 
-Réponds UNIQUEMENT en JSON valide, sans markdown :
-{{
-  "sujet": "...",
-  "angle": "...",
-  "keywords": ["mot-clé 1", "mot-clé 2", "mot-clé 3"],
-  "persona": "ex: Responsable RH, DRH, Directeur Marketing..."
-}}"""
+Réponds UNIQUEMENT en JSON :
+{{"sujet": "...", "angle": "..."}}"""
 
-    raw = claude(prompt, max_tokens=400)
+    raw = claude(prompt, max_tokens=200)
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     raw = re.sub(r"\s*```$", "", raw)
     return json.loads(raw)
 
 
-# ── Étape 2 : scrape LinkedIn posts via Apify ─────────────────────────────────
-def scrape_linkedin_posts(keywords):
-    log(f"Étape 2 — Scraping LinkedIn posts pour : {', '.join(keywords)}...")
+# ── Étape 2 : scrape profils LinkedIn par titre de poste ──────────────────────
+def scrape_linkedin_profiles(personas):
+    """
+    personas = liste de titres de poste ex: ["DRH", "Responsable RH"]
+    Utilise harvestapi~linkedin-profile-search
+    """
+    log(f"Étape 2 — Scraping profils LinkedIn : {', '.join(personas)}...")
+    all_profiles = []
+    seen = set()
 
-    # On scrape chaque keyword séparément et on fusionne
-    all_posts = []
-    for keyword in keywords:
-        log(f"  Keyword : {keyword}")
+    for persona in personas:
+        log(f"  Persona : {persona}")
         try:
             run_resp = requests.post(
-                f"https://api.apify.com/v2/acts/{APIFY_ACTOR_LINKEDIN}/runs?token={APIFY_API_KEY}",
+                f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs?token={APIFY_API_KEY}",
                 headers={"Content-Type": "application/json"},
                 json={
-                    "queries": [keyword],
-                    "maxPosts": MAX_POSTS,
-                    "scrapeComments": True,
-                    "maxComments": 20,
+                    "searchQuery": persona,
+                    "location": TARGET_LOCATION,
+                    "maxResults": MAX_PROFILES // len(personas),
+                    "scrapeType": "short",
                 },
                 timeout=30,
             )
             run_resp.raise_for_status()
             run_id = run_resp.json()["data"]["id"]
-            log(f"    Run Apify : {run_id}")
+            log(f"    Run : {run_id}")
 
             # Polling
-            for attempt in range(30):
+            for _ in range(30):
                 time.sleep(8)
-                status_resp = requests.get(
+                s = requests.get(
                     f"https://api.apify.com/v2/actor-runs/{run_id}?token={APIFY_API_KEY}",
                     timeout=15,
-                )
-                status = status_resp.json()["data"]["status"]
-                if status == "SUCCEEDED":
+                ).json()["data"]["status"]
+                if s == "SUCCEEDED":
                     break
-                elif status in ("FAILED", "ABORTED", "TIMED-OUT"):
-                    log(f"    Run échoué : {status}")
+                elif s in ("FAILED", "ABORTED", "TIMED-OUT"):
+                    log(f"    Run échoué : {s}")
                     break
 
-            # Résultats
-            items_resp = requests.get(
-                f"https://api.apify.com/v2/actor-runs/{run_id}/dataset/items?token={APIFY_API_KEY}&limit={MAX_POSTS}",
+            items = requests.get(
+                f"https://api.apify.com/v2/actor-runs/{run_id}/dataset/items?token={APIFY_API_KEY}&limit=50",
                 timeout=30,
-            )
-            posts = items_resp.json()
-            log(f"    {len(posts)} posts récupérés")
-            all_posts.extend(posts)
+            ).json()
+
+            for item in items:
+                fname = item.get("firstName") or item.get("first_name", "")
+                lname = item.get("lastName") or item.get("last_name", "")
+                company = item.get("companyName") or item.get("company", "")
+                headline = item.get("headline", "")
+                profile_url = item.get("profileUrl") or item.get("url", "")
+
+                if not fname or not lname:
+                    continue
+                key = f"{fname}|{lname}|{company}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                all_profiles.append({
+                    "first_name":   fname,
+                    "last_name":    lname,
+                    "company":      company,
+                    "headline":     headline,
+                    "profile_url":  profile_url,
+                    "persona":      persona,
+                    "email":        "",
+                })
+
+            log(f"    {len(items)} profils récupérés")
             time.sleep(3)
 
         except Exception as e:
-            log(f"    Erreur keyword '{keyword}' : {e}")
+            log(f"    Erreur persona '{persona}' : {e}")
 
-    log(f"  Total : {len(all_posts)} posts LinkedIn récupérés")
-    return all_posts
-
-
-# ── Étape 3 : extraire commentateurs ─────────────────────────────────────────
-def extract_commenters(posts):
-    """
-    Extrait les auteurs des posts + commentateurs uniques.
-    Retourne liste de {first_name, last_name, company, profile_url}
-    """
-    log("Étape 3 — Extraction des commentateurs...")
-    seen = set()
-    contacts = []
-
-    for post in posts:
-        # Auteur du post
-        author = post.get("author") or post.get("authorName") or {}
-        if isinstance(author, dict):
-            fname = author.get("firstName") or author.get("first_name", "")
-            lname = author.get("lastName") or author.get("last_name", "")
-            company = author.get("companyName") or author.get("company", "")
-            profile = author.get("profileUrl") or author.get("url", "")
-        elif isinstance(author, str):
-            parts = author.strip().split(" ", 1)
-            fname = parts[0] if parts else ""
-            lname = parts[1] if len(parts) > 1 else ""
-            company = ""
-            profile = post.get("authorUrl", "")
-
-        if fname and lname:
-            key = f"{fname}|{lname}|{company}"
-            if key not in seen:
-                seen.add(key)
-                contacts.append({
-                    "first_name": fname,
-                    "last_name":  lname,
-                    "company":    company,
-                    "profile_url": profile,
-                    "source":     "post_author",
-                })
-
-        # Commentateurs si disponibles
-        for comment in post.get("comments", []) or []:
-            commenter = comment.get("author") or comment.get("commenterName") or {}
-            if isinstance(commenter, dict):
-                fname = commenter.get("firstName") or commenter.get("first_name", "")
-                lname = commenter.get("lastName") or commenter.get("last_name", "")
-                company = commenter.get("companyName") or commenter.get("company", "")
-                profile = commenter.get("profileUrl") or ""
-            elif isinstance(commenter, str):
-                parts = commenter.strip().split(" ", 1)
-                fname = parts[0] if parts else ""
-                lname = parts[1] if len(parts) > 1 else ""
-                company = ""
-                profile = ""
-
-            if fname and lname:
-                key = f"{fname}|{lname}|{company}"
-                if key not in seen:
-                    seen.add(key)
-                    contacts.append({
-                        "first_name": fname,
-                        "last_name":  lname,
-                        "company":    company,
-                        "profile_url": profile,
-                        "source":     "commenter",
-                    })
-
-        if len(contacts) >= MAX_COMMENTERS:
-            break
-
-    log(f"  {len(contacts)} contacts uniques extraits")
-    return contacts[:MAX_COMMENTERS]
+    log(f"  Total : {len(all_profiles)} profils uniques")
+    return all_profiles[:MAX_PROFILES]
 
 
-# ── Étape 4 : enrichissement Dropcontact ─────────────────────────────────────
-def enrich_with_dropcontact(contacts):
+# ── Étape 3 : enrichissement Dropcontact ─────────────────────────────────────
+def enrich_with_dropcontact(profiles):
     if not DROPCONTACT_API_KEY:
-        log("Étape 4 — Dropcontact ignoré (clé manquante)")
-        return contacts
+        log("Étape 3 — Dropcontact ignoré (clé manquante)")
+        return profiles
 
-    log(f"Étape 4 — Enrichissement Dropcontact ({len(contacts)} contacts)...")
+    log(f"Étape 3 — Enrichissement Dropcontact ({len(profiles)} profils)...")
     enriched = []
-
-    for i, contact in enumerate(contacts):
-        if not contact.get("first_name") or not contact.get("last_name"):
-            enriched.append(contact)
-            continue
-
+    for i, p in enumerate(profiles):
         try:
             resp = requests.post(
                 "https://api.dropcontact.com/v1/enrich/",
@@ -256,92 +189,76 @@ def enrich_with_dropcontact(contacts):
                 },
                 json={
                     "data": [{
-                        "first_name": contact["first_name"],
-                        "last_name":  contact["last_name"],
-                        "company":    contact.get("company", ""),
+                        "first_name": p["first_name"],
+                        "last_name":  p["last_name"],
+                        "company":    p.get("company", ""),
                     }],
                     "siren": False,
                 },
                 timeout=30,
             )
             if resp.status_code == 200:
-                result = resp.json()
-                data = result.get("data", [{}])[0] if result.get("data") else {}
-                email = ""
-                for email_entry in data.get("email", []):
-                    if isinstance(email_entry, dict) and email_entry.get("email"):
-                        email = email_entry["email"]
+                data = resp.json().get("data", [{}])[0]
+                for e in data.get("email", []):
+                    if isinstance(e, dict) and e.get("email"):
+                        p["email"] = e["email"]
                         break
-                    elif isinstance(email_entry, str):
-                        email = email_entry
+                    elif isinstance(e, str):
+                        p["email"] = e
                         break
-                contact["email"] = email
-                if email:
-                    log(f"  ✓ {contact['first_name']} {contact['last_name']} → {email}")
-                else:
-                    log(f"  - {contact['first_name']} {contact['last_name']} → pas d'email")
-            else:
-                log(f"  Dropcontact erreur {resp.status_code}")
-                contact["email"] = ""
-
+                if p["email"]:
+                    log(f"  ✓ {p['first_name']} {p['last_name']} → {p['email']}")
         except Exception as e:
-            log(f"  Erreur Dropcontact pour {contact.get('first_name')} : {e}")
-            contact["email"] = ""
+            log(f"  Erreur {p.get('first_name')} : {e}")
 
-        enriched.append(contact)
-        time.sleep(1.5)  # respect rate limit
+        enriched.append(p)
+        time.sleep(1.5)
 
-    emails_found = sum(1 for c in enriched if c.get("email"))
-    log(f"  {emails_found}/{len(enriched)} emails trouvés")
+    found = sum(1 for p in enriched if p.get("email"))
+    log(f"  {found}/{len(enriched)} emails trouvés")
     return enriched
 
 
-# ── Étape 5 : générer les emails ─────────────────────────────────────────────
-def generate_emails(contacts, ep_title, ep_slug, targets):
-    log(f"Étape 5 — Génération de {len(contacts)} emails...")
+# ── Étape 4 : générer les emails ─────────────────────────────────────────────
+def generate_emails(profiles, ep_title, ep_slug, context):
+    log(f"Étape 4 — Génération {len(profiles)} emails...")
     article_url = f"{SITE_BASE_URL}/fiche-geo-ia/{ep_slug}/index.html" if SITE_BASE_URL else f"https://listenly.fr/fiche-geo-ia/{ep_slug}/"
 
     leads = []
-    for i, contact in enumerate(contacts):
-        fname = contact.get("first_name", "")
-        lname = contact.get("last_name", "")
-        company = contact.get("company", "")
-        email = contact.get("email", "")
+    for i, p in enumerate(profiles):
+        fname   = p.get("first_name", "")
+        lname   = p.get("last_name", "")
+        company = p.get("company", "")
+        headline = p.get("headline", p.get("persona", ""))
 
-        log(f"  Email {i+1}/{len(contacts)} — {fname} {lname} ({company})")
+        log(f"  {i+1}/{len(profiles)} — {fname} {lname} ({company})")
 
         prompt = f"""Tu es Etienne, fondateur de Listenly (listenly.fr), l'annuaire de référence des podcasts B2B français.
-Tu envoies un email court et naturel — une recommandation éditoriale, pas un pitch commercial.
 
-Contexte :
-- Destinataire : {fname} {lname}{f' chez {company}' if company else ''}
-- Podcast recommandé : {BLOG_NAME}
-- Sujet de l'épisode : {targets['sujet']}
-- Angle utile : {targets['angle']}
-- Lien fiche Listenly : {article_url}
-- Persona cible : {targets.get('persona', 'professionnel')}
+Destinataire : {fname} {lname}{f', {headline}' if headline else ''}{f' chez {company}' if company else ''}
+Podcast : {BLOG_NAME}
+Sujet épisode : {context['sujet']}
+Pourquoi ça les concerne : {context['angle']}
+Lien fiche : {article_url}
 
-Rédige un email en français, 5-6 lignes maximum :
-- Commence par "Bonjour {fname},"
-- Ton naturel, comme si tu envoyais un lien à un collègue
-- Mentionne que tu diriges Listenly, l'annuaire des podcasts B2B
-- Cite le sujet de l'épisode en lien avec leur profil
-- Lien vers la fiche
-- Termine par une question ouverte courte
+Rédige un email français, 5 lignes max :
+- "Bonjour {fname},"
+- Tu diriges Listenly, annuaire podcasts B2B
+- Tu as référencé un épisode qui colle à leur profil
+- Lien
+- 1 question ouverte courte
 - Signature : Etienne — Listenly.fr
-- Jamais de "pitch", "offre", "solution", "ROI"
+- Jamais : "pitch", "offre", "solution", "ROI"
 
-Format EXACT :
-OBJET: [sujet accrocheur 1 ligne]
+Format :
+OBJET: [accroche courte]
 ---
-[corps de l'email]"""
+[corps]"""
 
         try:
-            raw = claude(prompt, max_tokens=400)
+            raw = claude(prompt, max_tokens=350)
             lines = raw.strip().split("\n")
-            subject = ""
-            body_lines = []
-            in_body = False
+            subject, body_lines, in_body = "", [], False
             for line in lines:
                 if line.startswith("OBJET:"):
                     subject = line.replace("OBJET:", "").strip()
@@ -349,31 +266,25 @@ OBJET: [sujet accrocheur 1 ligne]
                     in_body = True
                 elif in_body:
                     body_lines.append(line)
-            body = "\n".join(body_lines).strip()
 
             leads.append({
-                "first_name":     fname,
-                "last_name":      lname,
-                "company":        company,
-                "email":          email,
-                "profile_url":    contact.get("profile_url", ""),
-                "source":         contact.get("source", ""),
-                "email_subject":  subject,
-                "email_body":     body,
-                "article_url":    article_url,
-                "sujet":          targets["sujet"],
-                "ep_title":       ep_title,
-                "generated_at":   datetime.now(timezone.utc).isoformat(),
+                **p,
+                "email_subject": subject,
+                "email_body":    "\n".join(body_lines).strip(),
+                "article_url":   article_url,
+                "sujet":         context["sujet"],
+                "ep_title":      ep_title,
+                "generated_at":  datetime.now(timezone.utc).isoformat(),
             })
         except Exception as e:
-            log(f"  ✗ Erreur email {fname} {lname} : {e}")
+            log(f"  ✗ Erreur {fname} {lname} : {e}")
 
         time.sleep(1)
 
     return leads
 
 
-# ── Étape 6 : sauvegarder CSV ─────────────────────────────────────────────────
+# ── Étape 5 : CSV ─────────────────────────────────────────────────────────────
 def save_leads_csv(leads, ep_slug):
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
     out_dir = os.path.join(LEADS_DIR, ep_slug)
@@ -381,98 +292,90 @@ def save_leads_csv(leads, ep_slug):
     csv_path = os.path.join(out_dir, f"leads_{today}.csv")
 
     fieldnames = [
-        "first_name", "last_name", "company", "email", "profile_url",
-        "source", "email_subject", "email_body", "article_url",
-        "sujet", "ep_title", "generated_at",
+        "first_name", "last_name", "company", "headline", "persona",
+        "email", "profile_url", "email_subject", "email_body",
+        "article_url", "sujet", "ep_title", "generated_at",
     ]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(leads)
 
-    log(f"CSV sauvegardé : {csv_path} ({len(leads)} leads)")
+    log(f"CSV : {csv_path} ({len(leads)} leads)")
     return csv_path
 
 
-# ── Étape 7 : notif email ─────────────────────────────────────────────────────
+# ── Étape 6 : notif email ─────────────────────────────────────────────────────
 def send_notification(ep_title, ep_slug, leads, csv_path):
     if not all([NOTIFY_EMAIL, SMTP_HOST, SMTP_USER, SMTP_PASS]):
-        log("Notif email ignorée (variables SMTP manquantes)")
+        log("Notif ignorée (SMTP manquant)")
         return
 
     article_url = f"{SITE_BASE_URL}/fiche-geo-ia/{ep_slug}/index.html" if SITE_BASE_URL else ""
-    leads_with_email = [l for l in leads if l.get("email")]
-    leads_with_body  = [l for l in leads if l.get("email_body")]
+    with_email = [l for l in leads if l.get("email")]
+    with_body  = [l for l in leads if l.get("email_body")]
 
-    sample_rows = ""
-    for lead in leads_with_body[:5]:
-        gmail_url = (
+    rows = ""
+    for lead in with_body[:5]:
+        gmail = (
             f"https://mail.google.com/mail/?view=cm&fs=1"
             f"&su={requests.utils.quote(lead.get('email_subject',''))}"
             f"&to={requests.utils.quote(lead.get('email',''))}"
             f"&body={requests.utils.quote(lead.get('email_body',''))}"
         )
-        sample_rows += f"""
-        <tr>
+        rows += f"""<tr>
           <td style="padding:8px;border-bottom:1px solid #eee">
             <strong>{lead['first_name']} {lead['last_name']}</strong><br>
-            <small style="color:#666">{lead.get('company','')}</small>
+            <small>{lead.get('headline','')} · {lead.get('company','')}</small>
           </td>
           <td style="padding:8px;border-bottom:1px solid #eee">
-            <small style="color:#444">{lead.get('email','—')}</small><br>
-            <em style="color:#888;font-size:12px">{lead.get('email_subject','')}</em>
+            <small>{lead.get('email','—')}</small><br>
+            <em style="font-size:12px;color:#666">{lead.get('email_subject','')}</em>
           </td>
           <td style="padding:8px;border-bottom:1px solid #eee;text-align:center">
-            <a href="{gmail_url}" style="background:#0E2A47;color:white;padding:6px 12px;border-radius:4px;text-decoration:none;font-size:12px">
-              Ouvrir Gmail
-            </a>
+            <a href="{gmail}" style="background:#0E2A47;color:white;padding:6px 12px;border-radius:4px;text-decoration:none;font-size:12px">Gmail</a>
           </td>
         </tr>"""
 
-    html_body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto">
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:700px">
       <div style="background:#0E2A47;padding:20px 24px;border-radius:8px 8px 0 0">
-        <h1 style="color:white;margin:0;font-size:20px">🎙 Listenly Lead Gen</h1>
-        <p style="color:#D8A53C;margin:4px 0 0;font-size:14px">{BLOG_NAME} — nouvel épisode traité</p>
+        <h1 style="color:white;margin:0;font-size:18px">🎙 Listenly Lead Gen — {BLOG_NAME}</h1>
       </div>
       <div style="background:#f9f9f9;padding:20px 24px;border:1px solid #eee">
         <p><strong>Épisode :</strong> {ep_title}</p>
-        <p><strong>Fiche Listenly :</strong> <a href="{article_url}">{article_url}</a></p>
+        <p><strong>Fiche :</strong> <a href="{article_url}">{article_url}</a></p>
+        <p><strong>Persona ciblé :</strong> {TARGET_PERSONA}</p>
         <table style="width:100%;border-collapse:collapse;margin:12px 0">
           <tr style="background:#eee">
-            <td style="padding:6px 8px;font-size:12px;font-weight:bold">CONTACTS</td>
-            <td style="padding:6px 8px;font-size:12px;font-weight:bold">EMAILS TROUVÉS</td>
-            <td style="padding:6px 8px;font-size:12px;font-weight:bold">EMAILS RÉDIGÉS</td>
+            <td style="padding:6px 8px;font-size:12px"><b>PROFILS</b></td>
+            <td style="padding:6px 8px;font-size:12px"><b>EMAILS</b></td>
+            <td style="padding:6px 8px;font-size:12px"><b>RÉDIGÉS</b></td>
           </tr>
           <tr>
             <td style="padding:8px;font-size:22px;font-weight:bold;color:#0E2A47">{len(leads)}</td>
-            <td style="padding:8px;font-size:22px;font-weight:bold;color:#D8A53C">{len(leads_with_email)}</td>
-            <td style="padding:8px;font-size:22px;font-weight:bold;color:#2e7d32">{len(leads_with_body)}</td>
+            <td style="padding:8px;font-size:22px;font-weight:bold;color:#D8A53C">{len(with_email)}</td>
+            <td style="padding:8px;font-size:22px;font-weight:bold;color:#2e7d32">{len(with_body)}</td>
           </tr>
         </table>
-        <h2 style="font-size:15px;margin-top:20px">5 premiers leads</h2>
         <table style="width:100%;border-collapse:collapse">
           <tr style="background:#f0f0f0">
-            <td style="padding:8px;font-size:12px;font-weight:bold">Contact</td>
-            <td style="padding:8px;font-size:12px;font-weight:bold">Email</td>
-            <td style="padding:8px;font-size:12px;font-weight:bold">Action</td>
+            <td style="padding:8px;font-size:12px"><b>Contact</b></td>
+            <td style="padding:8px;font-size:12px"><b>Email / Objet</b></td>
+            <td style="padding:8px;font-size:12px"><b>Action</b></td>
           </tr>
-          {sample_rows}
+          {rows}
         </table>
-        <p style="margin-top:16px;font-size:13px;color:#666">
-          📎 CSV complet joint — {len(leads)} leads avec emails prérédigés
-        </p>
       </div>
-      <div style="background:#0E2A47;padding:12px 24px;border-radius:0 0 8px 8px;text-align:center">
+      <div style="background:#0E2A47;padding:10px 24px;border-radius:0 0 8px 8px;text-align:center">
         <p style="color:#aaa;margin:0;font-size:12px">Listenly.fr · MarketForge GEO Lead Gen</p>
       </div>
     </div>"""
 
     msg = MIMEMultipart("mixed")
-    msg["Subject"] = f"🎙 {len(leads_with_body)} leads — {ep_title[:50]}"
+    msg["Subject"] = f"🎙 {len(with_body)} leads — {ep_title[:50]}"
     msg["From"]    = SMTP_USER
     msg["To"]      = NOTIFY_EMAIL
-    msg.attach(MIMEText(html_body, "html"))
+    msg.attach(MIMEText(html, "html"))
 
     with open(csv_path, "rb") as f:
         part = MIMEBase("text", "csv")
@@ -482,49 +385,49 @@ def send_notification(ep_title, ep_slug, leads, csv_path):
         msg.attach(part)
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.send_message(msg)
-        log(f"Notif envoyée à {NOTIFY_EMAIL}")
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASS)
+            s.send_message(msg)
+        log(f"Notif envoyée → {NOTIFY_EMAIL}")
     except Exception as e:
-        log(f"Erreur notif email : {e}")
+        log(f"Erreur notif : {e}")
 
 
-# ── Point d'entrée principal ──────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 def run_leadgen(ep_title, ep_slug, questions):
     if not APIFY_API_KEY:
-        log("APIFY_API_KEY manquante — lead gen ignoré")
+        log("APIFY_API_KEY manquante — ignoré")
         return
     if not ANTHROPIC_API_KEY:
-        log("ANTHROPIC_API_KEY manquante — lead gen ignoré")
+        log("ANTHROPIC_API_KEY manquante — ignoré")
+        return
+    if not TARGET_PERSONA:
+        log("TARGET_PERSONA manquant — ignoré (configurer le secret GitHub)")
         return
 
-    log(f"=== Lead Gen v2 démarré : {ep_title} ===")
+    log(f"=== Lead Gen v3 : {ep_title} ===")
+    log(f"  Persona cible : {TARGET_PERSONA}")
+
     try:
-        # 1. Mots-clés LinkedIn
-        targets = extract_linkedin_keywords(ep_title, questions)
-        log(f"  Sujet : {targets['sujet']}")
-        log(f"  Keywords : {', '.join(targets['keywords'])}")
-        log(f"  Persona : {targets.get('persona','')}")
+        # 1. Contexte épisode
+        context = extract_episode_context(ep_title, questions)
+        log(f"  Sujet : {context['sujet']}")
 
-        # 2. Scrape LinkedIn posts
-        posts = scrape_linkedin_posts(targets["keywords"])
-        if not posts:
-            log("Aucun post LinkedIn trouvé")
+        # 2. Parse personas
+        personas = [p.strip() for p in TARGET_PERSONA.split(",") if p.strip()]
+
+        # 3. Scrape profils LinkedIn
+        profiles = scrape_linkedin_profiles(personas)
+        if not profiles:
+            log("Aucun profil trouvé")
             return
 
-        # 3. Extraire commentateurs
-        contacts = extract_commenters(posts)
-        if not contacts:
-            log("Aucun contact extrait")
-            return
+        # 4. Dropcontact
+        profiles = enrich_with_dropcontact(profiles)
 
-        # 4. Enrichissement Dropcontact
-        contacts = enrich_with_dropcontact(contacts)
-
-        # 5. Générer emails
-        leads = generate_emails(contacts, ep_title, ep_slug, targets)
+        # 5. Emails
+        leads = generate_emails(profiles, ep_title, ep_slug, context)
 
         # 6. CSV
         csv_path = save_leads_csv(leads, ep_slug)
@@ -532,20 +435,16 @@ def run_leadgen(ep_title, ep_slug, questions):
         # 7. Notif
         send_notification(ep_title, ep_slug, leads, csv_path)
 
-        log(f"=== Lead Gen terminé : {len(leads)} leads → {csv_path} ===")
+        log(f"=== Terminé : {len(leads)} leads → {csv_path} ===")
 
     except Exception as e:
-        log(f"✗ Lead Gen erreur : {e}")
+        log(f"✗ Erreur : {e}")
         import traceback; traceback.print_exc()
 
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) >= 3:
-        run_leadgen(
-            ep_title=sys.argv[1],
-            ep_slug=sys.argv[2],
-            questions=[{"question": "Question test", "angle": "Angle test"}],
-        )
+        run_leadgen(sys.argv[1], sys.argv[2], [{"question": "test"}])
     else:
-        print("Usage: python leadgen.py 'Titre épisode' 'episode-slug'")
+        print("Usage: python leadgen.py 'Titre' 'slug'")
