@@ -216,7 +216,7 @@ def enrich_with_dropcontact(profiles):
     for i, p in enumerate(profiles):
         try:
             resp = requests.post(
-                "https://api.dropcontact.com/v1/enrich/",
+                "https://api.dropcontact.io/b2b/v2/enrich",
                 headers={
                     "X-Access-Token": DROPCONTACT_API_KEY,
                     "Content-Type": "application/json",
@@ -227,19 +227,18 @@ def enrich_with_dropcontact(profiles):
                         "last_name":  p["last_name"],
                         "company":    p.get("company", ""),
                     }],
-                    "siren": False,
-                },
-                timeout=30,
+                timeout=60,
             )
+            log(f"  DC {resp.status_code}: {resp.text[:150]}")
             if resp.status_code == 200:
-                data = resp.json().get("data", [{}])[0]
+                result = resp.json()
+                contacts = result.get("data") or [{}]
+                data = contacts[0] if contacts else {}
                 for e in data.get("email", []):
                     if isinstance(e, dict) and e.get("email"):
-                        p["email"] = e["email"]
-                        break
-                    elif isinstance(e, str):
-                        p["email"] = e
-                        break
+                        p["email"] = e["email"]; break
+                    elif isinstance(e, str) and "@" in e:
+                        p["email"] = e; break
                 if p["email"]:
                     log(f"  ✓ {p['first_name']} {p['last_name']} → {p['email']}")
         except Exception as e:
