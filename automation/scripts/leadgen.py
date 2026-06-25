@@ -44,7 +44,7 @@ SITE_BASE_URL        = os.environ.get("SITE_BASE_URL", "").rstrip("/")
 BLOG_NAME            = os.environ.get("BLOG_NAME", "Notre Podcast")
 
 ANTHROPIC_MODEL      = "claude-sonnet-4-6"
-APIFY_ACTOR_LINKEDIN = "harvestapi/linkedin-post-search"
+APIFY_ACTOR_LINKEDIN = "harvestapi~linkedin-post-search"
 MAX_POSTS            = 20   # posts LinkedIn à scraper
 MAX_COMMENTERS       = 50   # commentateurs max à extraire
 LEADS_DIR            = "leads"
