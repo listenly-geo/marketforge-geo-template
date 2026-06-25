@@ -41,7 +41,7 @@ TARGET_PERSONA      = os.environ.get("TARGET_PERSONA", "")
 TARGET_LOCATION     = os.environ.get("TARGET_LOCATION", "France")
 
 ANTHROPIC_MODEL     = "claude-sonnet-4-6"
-APIFY_ACTOR         = "harvestapi~linkedin-profile-search"
+APIFY_ACTOR         = "harvestapi~linkedin-post-search"
 MAX_PROFILES        = 50
 LEADS_DIR           = "leads"
 
@@ -109,10 +109,12 @@ def scrape_linkedin_profiles(personas):
                 f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs?token={APIFY_API_KEY}",
                 headers={"Content-Type": "application/json"},
                 json={
-                    "searchQuery": persona,
-                    "location": TARGET_LOCATION,
-                    "maxResults": MAX_PROFILES // len(personas),
-                    "scrapeType": "short",
+                    "searchQueries": [f"{persona} {TARGET_LOCATION}"],
+                    "maxPosts": MAX_PROFILES // len(personas),
+                    "profileScraperMode": "short",
+                    "scrapeComments": False,
+                    "scrapeReactions": False,
+                    "postedLimit": "month",
                 },
                 timeout=30,
             )
@@ -139,11 +141,21 @@ def scrape_linkedin_profiles(personas):
             ).json()
 
             for item in items:
-                fname = item.get("firstName") or item.get("first_name", "")
-                lname = item.get("lastName") or item.get("last_name", "")
-                company = item.get("companyName") or item.get("company", "")
-                headline = item.get("headline", "")
-                profile_url = item.get("profileUrl") or item.get("url", "")
+                # Extraire auteur du post
+                author = item.get("author") or {}
+                if isinstance(author, str):
+                    parts = author.strip().split(" ", 1)
+                    fname = parts[0] if parts else ""
+                    lname = parts[1] if len(parts) > 1 else ""
+                    company = ""
+                    headline = ""
+                    profile_url = item.get("authorUrl", "")
+                else:
+                    fname = author.get("firstName") or author.get("first_name", "")
+                    lname = author.get("lastName") or author.get("last_name", "")
+                    company = author.get("companyName") or author.get("company", "")
+                    headline = author.get("headline", "")
+                    profile_url = author.get("profileUrl") or author.get("url", "") or item.get("authorUrl", "")
 
                 if not fname or not lname:
                     continue
