@@ -1,0 +1,57 @@
+name: MarketForge GEO - Generate FAQ Articles
+on:
+  workflow_dispatch:
+    inputs:
+      max_new:
+        description: "Nombre d'episodes a traiter"
+        required: false
+        default: "1"
+  schedule:
+    - cron: "0 6 * * *"
+permissions:
+  contents: write
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Generate FAQ articles
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RSS_URL: ${{ vars.RSS_URL }}
+          BLOG_NAME: ${{ vars.BLOG_NAME }}
+          COMPANY_NAME: ${{ vars.COMPANY_NAME }}
+          ACCENT_COLOR: ${{ vars.ACCENT_COLOR }}
+          SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
+          OUTPUT_DIR: "articles"
+          MAX_NEW_PER_RUN: ${{ github.event.inputs.max_new || '1' }}
+        run: python automation/scripts/generate_articles.py
+      - name: Commit and deploy
+        run: |
+          git config user.name "marketforge-bot"
+          git config user.email "bot@marketforge.fr"
+          git pull --rebase --autostash origin main
+          mkdir -p pages/article-faq
+          for d in articles/*/; do
+            ep=$(basename "$d")
+            if [ "$ep" != "_transcriptions" ]; then
+              cp -r "$d" "pages/article-faq/$ep"
+            fi
+          done
+          git add automation/ articles/ pages/article-faq/
+          if git diff --staged --quiet; then
+            echo "Aucun article."
+          else
+            git commit -m "FAQ GEO articles -- $(date +%Y-%m-%d)"
+            git push
+          fi
