@@ -173,10 +173,29 @@ def scrape_linkedin_profiles(personas):
                     "email":        "",
                 })
 
-            if items:
-                log(f"    DEBUG ALL KEYS : {list(items[0].keys())}")
-                log(f"    DEBUG premier item complet : {json.dumps(items[0], ensure_ascii=False)[:1500]}")
             log(f"    {len(items)} profils récupérés")
+            for item in items:
+                fname = item.get("firstName", "")
+                lname = item.get("lastName", "")
+                if not fname or not lname:
+                    continue
+                current_pos = item.get("currentPosition") or []
+                company = current_pos[0].get("companyName", "") if isinstance(current_pos, list) and current_pos else ""
+                headline = item.get("headline", "")
+                profile_url = item.get("linkedinUrl") or item.get("profileUrl", "")
+                key = f"{fname}|{lname}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                all_profiles.append({
+                    "first_name":  fname,
+                    "last_name":   lname,
+                    "company":     company,
+                    "headline":    headline,
+                    "profile_url": profile_url,
+                    "persona":     persona,
+                    "email":       "",
+                })
             time.sleep(3)
 
         except Exception as e:
