@@ -174,7 +174,8 @@ def scrape_linkedin_profiles(personas):
                 })
 
             if items:
-                log(f"    DEBUG premier item : {json.dumps(items[0], ensure_ascii=False)[:500]}")
+                log(f"    DEBUG ALL KEYS : {list(items[0].keys())}")
+                log(f"    DEBUG premier item complet : {json.dumps(items[0], ensure_ascii=False)[:1500]}")
             log(f"    {len(items)} profils récupérés")
             time.sleep(3)
 
