@@ -44,7 +44,7 @@ SITE_BASE_URL        = os.environ.get("SITE_BASE_URL", "").rstrip("/")
 BLOG_NAME            = os.environ.get("BLOG_NAME", "Notre Podcast")
 
 ANTHROPIC_MODEL      = "claude-sonnet-4-6"
-APIFY_ACTOR_LINKEDIN = "apimaestro/linkedin-posts-search-scraper-no-cookies"
+APIFY_ACTOR_LINKEDIN = "harvestapi/linkedin-post-search"
 MAX_POSTS            = 20   # posts LinkedIn à scraper
 MAX_COMMENTERS       = 50   # commentateurs max à extraire
 LEADS_DIR            = "leads"
@@ -120,9 +120,10 @@ def scrape_linkedin_posts(keywords):
                 f"https://api.apify.com/v2/acts/{APIFY_ACTOR_LINKEDIN}/runs?token={APIFY_API_KEY}",
                 headers={"Content-Type": "application/json"},
                 json={
-                    "keywords": [keyword],
-                    "maxResults": MAX_POSTS,
-                    "proxyConfiguration": {"useApifyProxy": True},
+                    "queries": [keyword],
+                    "maxPosts": MAX_POSTS,
+                    "scrapeComments": True,
+                    "maxComments": 20,
                 },
                 timeout=30,
             )
