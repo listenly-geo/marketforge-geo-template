@@ -38,6 +38,7 @@ jobs:
           SMTP_PASS:         ${{ secrets.SMTP_PASS }}
           BLOG_NAME:         ${{ github.event.inputs.blog_name }}
           SITE_BASE_URL:     "https://listenly.fr"
+        TARGET_PERSONA:    ${{ secrets.TARGET_PERSONA }}
         run: |
           python3 leadgen.py "${{ github.event.inputs.ep_title }}" "${{ github.event.inputs.ep_slug }}"
       - name: Upload CSV en artifact
