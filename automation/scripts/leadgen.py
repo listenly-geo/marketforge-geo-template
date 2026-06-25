@@ -109,9 +109,12 @@ def scrape_linkedin_profiles(personas):
                 f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs?token={APIFY_API_KEY}",
                 headers={"Content-Type": "application/json"},
                 json={
-                    "searchQuery": f"{persona} {TARGET_LOCATION}",
-                    "maxResults": MAX_PROFILES // len(personas),
-                    "scrapeType": "short",
+                    "searchQuery": persona,
+                    "maxItems": MAX_PROFILES // len(personas),
+                    "locations": [TARGET_LOCATION],
+                    "currentJobTitle": [persona],
+                    "autoQuerySegmentation": False,
+                    "recentlyChangedJobs": False,
                 },
                 timeout=30,
             )
