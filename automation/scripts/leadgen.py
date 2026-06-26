@@ -42,7 +42,7 @@ TARGET_LOCATION     = os.environ.get("TARGET_LOCATION", "France")
 
 ANTHROPIC_MODEL     = "claude-sonnet-4-6"
 APIFY_ACTOR         = "harvestapi~linkedin-profile-search"
-MAX_PROFILES        = 50
+MAX_PROFILES        = 15
 LEADS_DIR           = "leads"
 
 
