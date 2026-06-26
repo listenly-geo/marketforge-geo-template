@@ -110,7 +110,7 @@ def scrape_linkedin_profiles(personas):
                 headers={"Content-Type": "application/json"},
                 json={
                     "searchQuery": persona,
-                    "maxItems": MAX_PROFILES // len(personas),
+                    "maxItems": 15,
                     "locations": [TARGET_LOCATION],
                     "currentJobTitle": [persona],
                     "autoQuerySegmentation": False,
