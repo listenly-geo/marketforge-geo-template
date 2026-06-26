@@ -42,7 +42,7 @@ TARGET_LOCATION     = os.environ.get("TARGET_LOCATION", "France")
 
 ANTHROPIC_MODEL     = "claude-sonnet-4-6"
 APIFY_ACTOR         = "harvestapi~linkedin-profile-search"
-MAX_PROFILES        = 5   # TEST — remettre 50 en prod
+MAX_PROFILES        = 10  # TEST
 LEADS_DIR           = "leads"
 
 
@@ -110,7 +110,7 @@ def scrape_linkedin_profiles(personas):
                 headers={"Content-Type": "application/json"},
                 json={
                     "searchQuery": persona,
-                    "maxItems": MAX_PROFILES // len(personas),
+                    "maxItems": 10,
                     "locations": [TARGET_LOCATION],
                     "currentJobTitle": [persona],
                     "autoQuerySegmentation": False,
