@@ -297,8 +297,6 @@ def main():
         "ANTHROPIC_API_KEY": ANTHROPIC_API_KEY,
         "APIFY_TOKEN": APIFY_TOKEN,
         "DROPCONTACT_API_KEY": DROPCONTACT_API_KEY,
-        "BREVO_API_KEY": BREVO_API_KEY,
-        "EMAIL_FROM": EMAIL_FROM,
     }.items() if not v]
     if missing:
         log(f"ERREUR variables manquantes : {', '.join(missing)}")
@@ -337,10 +335,13 @@ def main():
             log("Aucun email — arrêt")
             sys.exit(0)
 
-        sent = send_emails(emails)
         csv_path = save_csv(emails, article_slug)
-        send_notif(sent, article_title, article_url, csv_path)
-        log(f"Terminé. {sent} emails envoyés.")
+        if EMAIL_FROM and BREVO_API_KEY:
+            sent = send_emails(emails)
+            send_notif(sent, article_title, article_url, csv_path)
+            log(f"Terminé. {sent} emails envoyés.")
+        else:
+            log(f"Terminé. {len(emails)} leads dans CSV (envoi désactivé — EMAIL_FROM manquant)")
 
     except Exception as ex:
         log(f"ERREUR : {ex}")
