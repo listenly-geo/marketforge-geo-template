@@ -15,7 +15,7 @@ Flow :
 Variables d'environnement :
   ANTHROPIC_API_KEY, APIFY_TOKEN, DROPCONTACT_API_KEY
   BREVO_API_KEY, EMAIL_FROM, EMAIL_FROM_NAME, EMAIL_REPLY_TO
-  LINKEDIN_LOCATIONS, LEADS_PER_ARTICLE
+  LEADS_PER_ARTICLE
   ARTICLES_DIR, REGISTRY_PATH
 """
 
@@ -30,7 +30,6 @@ BREVO_API_KEY       = os.environ.get("BREVO_API_KEY", "")
 EMAIL_FROM          = os.environ.get("EMAIL_FROM", "")
 EMAIL_FROM_NAME     = os.environ.get("EMAIL_FROM_NAME", "Listenly")
 EMAIL_REPLY_TO      = os.environ.get("EMAIL_REPLY_TO", EMAIL_FROM)
-LINKEDIN_LOCATIONS  = json.loads(os.environ.get("LINKEDIN_LOCATIONS", '["France"]'))
 LEADS_PER_ARTICLE   = int(os.environ.get("LEADS_PER_ARTICLE", "50"))
 ARTICLES_DIR        = os.environ.get("ARTICLES_DIR", "articles")
 BLOG_NAME           = os.environ.get("BLOG_NAME", "Notre Podcast")
@@ -122,8 +121,7 @@ def scrape_linkedin(persona):
         json={
             "searchQuery": persona['search_query'],
             "maxItems": max(LEADS_PER_ARTICLE + 10, 20),
-            "locations": LINKEDIN_LOCATIONS,
-            "currentJobTitle": job_titles,
+                        "currentJobTitle": job_titles,
         },
         timeout=30
     )
