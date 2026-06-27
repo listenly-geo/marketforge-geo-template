@@ -33,6 +33,9 @@ jobs:
           COMPANY_NAME: ${{ vars.COMPANY_NAME }}
           ACCENT_COLOR: ${{ vars.ACCENT_COLOR }}
           SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
+          PODCAST_URL: ${{ vars.PODCAST_URL }}
+          CONTACT_URL: ${{ vars.CONTACT_URL }}
+          LISTENLY_PODCAST_URL: ${{ vars.LISTENLY_PODCAST_URL }}
           OUTPUT_DIR: "articles"
           MAX_NEW_PER_RUN: ${{ github.event.inputs.max_new || '1' }}
         run: python automation/scripts/generate_articles.py
@@ -42,16 +45,13 @@ jobs:
           git config user.email "bot@marketforge.fr"
           git pull --rebase --autostash origin main
           mkdir -p pages/article-faq
-          for d in articles/*/; do
-            ep=$(basename "$d")
-            if [ "$ep" != "_transcriptions" ]; then
-              cp -r "$d" "pages/article-faq/$ep"
-            fi
+          for f in articles/*.html; do
+            [ -f "$f" ] && cp "$f" "pages/article-faq/"
           done
           git add automation/ articles/ pages/article-faq/
           if git diff --staged --quiet; then
             echo "Aucun article."
           else
-            git commit -m "FAQ GEO articles -- $(date +%Y-%m-%d)"
+            git commit -m "FAQ GEO article V3 -- $(date +%Y-%m-%d)"
             git push
           fi
