@@ -1,0 +1,52 @@
+name: MarketForge GEO - Lead Gen
+on:
+  workflow_run:
+    workflows: ["MarketForge GEO - Generate FAQ Articles"]
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  leadgen:
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Pull latest
+        run: git pull origin main
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Run leadgen
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          DROPCONTACT_API_KEY: ${{ secrets.DROPCONTACT_API_KEY }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          EMAIL_FROM_NAME: ${{ vars.EMAIL_FROM_NAME }}
+          EMAIL_REPLY_TO: ${{ vars.EMAIL_REPLY_TO }}
+          LINKEDIN_LOCATIONS: ${{ vars.LINKEDIN_LOCATIONS }}
+          LEADS_PER_ARTICLE: ${{ vars.LEADS_PER_ARTICLE }}
+          BLOG_NAME: ${{ vars.BLOG_NAME }}
+          SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
+          ARTICLES_DIR: "articles"
+        run: python automation/scripts/leadgen.py
+      - name: Commit CSV leads
+        run: |
+          git config user.name "marketforge-bot"
+          git config user.email "bot@marketforge.fr"
+          git pull --rebase --autostash origin main
+          git add leads/
+          if git diff --staged --quiet; then
+            echo "Pas de leads."
+          else
+            git commit -m "Leads -- $(date +%Y-%m-%d)"
+            git push
+          fi
