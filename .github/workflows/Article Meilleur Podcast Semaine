@@ -3,28 +3,24 @@ name: Article Meilleur Podcast Semaine
 on:
   workflow_dispatch:
     inputs:
-      episode_title:
-        description: "Titre de l'épisode"
-        required: true
-        default: ""
-      episode_description:
-        description: "Description de l'épisode (colle depuis Spotify/Ausha)"
+      rss_url:
+        description: "Flux RSS du podcast (vide = secret RSS_URL)"
         required: false
         default: ""
-      episode_date:
-        description: "Date de l'épisode (JJ/MM/AAAA)"
+      episode_index:
+        description: "Index episode (0=dernier, 1=avant-dernier...)"
         required: false
-        default: ""
+        default: "0"
       categorie:
-        description: "Catégorie"
+        description: "Categorie"
         required: false
         default: "Business"
       spotify_url:
-        description: "Lien Spotify épisode"
+        description: "Lien Spotify episode (CTA visible)"
         required: false
         default: ""
       linkedin_url:
-        description: "Profil LinkedIn hôte"
+        description: "Profil LinkedIn hote (CTA visible)"
         required: false
         default: ""
 
@@ -34,29 +30,31 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install anthropic requests --break-system-packages
+        run: pip install requests --break-system-packages
+
+      - name: Install ffmpeg
+        run: sudo apt-get install -y ffmpeg
 
       - name: Generate article
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          PODCAST_NAME: ${{ secrets.BLOG_NAME }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          RSS_URL: ${{ github.event.inputs.rss_url || secrets.RSS_URL }}
+          BLOG_NAME: ${{ secrets.BLOG_NAME }}
+          LISTENLY_PODCAST_URL: ${{ secrets.LISTENLY_PODCAST_URL }}
           CATEGORIE: ${{ github.event.inputs.categorie }}
           SPOTIFY_URL: ${{ github.event.inputs.spotify_url }}
           LINKEDIN_URL: ${{ github.event.inputs.linkedin_url }}
-          LISTENLY_URL: ${{ secrets.LISTENLY_PODCAST_URL }}
-          EPISODE_TITLE: ${{ github.event.inputs.episode_title }}
-          EPISODE_DESC: ${{ github.event.inputs.episode_description }}
-          EPISODE_DATE: ${{ github.event.inputs.episode_date }}
+          EPISODE_INDEX: ${{ github.event.inputs.episode_index }}
           OUTPUT_DIR: articles
         run: python automation/scripts/generate_article_semaine.py
 
-      - name: Deploy via FTP
+      - name: Deploy FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
           server: ${{ secrets.FTP_SERVER }}
