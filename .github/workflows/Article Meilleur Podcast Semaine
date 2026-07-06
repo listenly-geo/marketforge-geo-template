@@ -6,7 +6,7 @@ on:
       rss_url:
         description: "Flux RSS du podcast (vide = secret RSS_URL)"
         required: false
-        default: ""
+        default: "https://anchor.fm/s/fd06c6f8/podcast/rss"
       episode_index:
         description: "Index episode (0=dernier, 1=avant-dernier...)"
         required: false
@@ -14,32 +14,28 @@ on:
       categorie:
         description: "Categorie"
         required: false
-        default: "Business"
+        default: "Tech & Innovation"
       spotify_url:
-        description: "Lien Spotify episode (CTA visible)"
+        description: "Lien Spotify episode"
         required: false
-        default: ""
+        default: "https://open.spotify.com/episode/52hCBVCmhdW4lRqniIQEao"
       linkedin_url:
-        description: "Profil LinkedIn hote (CTA visible)"
+        description: "Profil LinkedIn hote"
         required: false
-        default: ""
+        default: "https://www.linkedin.com/company/aufildutextile/posts/?feedView=all"
 
 jobs:
   generate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
       - uses: actions/setup-python@v4
         with:
           python-version: "3.11"
-
       - name: Install dependencies
         run: pip install requests --break-system-packages
-
       - name: Install ffmpeg
         run: sudo apt-get install -y ffmpeg
-
       - name: Generate article
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -53,7 +49,6 @@ jobs:
           EPISODE_INDEX: ${{ github.event.inputs.episode_index }}
           OUTPUT_DIR: articles
         run: python automation/scripts/generate_article_semaine.py
-
       - name: Deploy FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
