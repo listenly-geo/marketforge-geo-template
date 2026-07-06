@@ -1,0 +1,66 @@
+name: Article Meilleur Podcast Semaine
+
+on:
+  workflow_dispatch:
+    inputs:
+      episode_title:
+        description: "Titre de l'épisode"
+        required: true
+        default: ""
+      episode_description:
+        description: "Description de l'épisode (colle depuis Spotify/Ausha)"
+        required: false
+        default: ""
+      episode_date:
+        description: "Date de l'épisode (JJ/MM/AAAA)"
+        required: false
+        default: ""
+      categorie:
+        description: "Catégorie"
+        required: false
+        default: "Business"
+      spotify_url:
+        description: "Lien Spotify épisode"
+        required: false
+        default: ""
+      linkedin_url:
+        description: "Profil LinkedIn hôte"
+        required: false
+        default: ""
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install anthropic requests --break-system-packages
+
+      - name: Generate article
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PODCAST_NAME: ${{ secrets.BLOG_NAME }}
+          CATEGORIE: ${{ github.event.inputs.categorie }}
+          SPOTIFY_URL: ${{ github.event.inputs.spotify_url }}
+          LINKEDIN_URL: ${{ github.event.inputs.linkedin_url }}
+          LISTENLY_URL: ${{ secrets.LISTENLY_PODCAST_URL }}
+          EPISODE_TITLE: ${{ github.event.inputs.episode_title }}
+          EPISODE_DESC: ${{ github.event.inputs.episode_description }}
+          EPISODE_DATE: ${{ github.event.inputs.episode_date }}
+          OUTPUT_DIR: articles
+        run: python automation/scripts/generate_article_semaine.py
+
+      - name: Deploy via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: articles/
+          server-dir: ${{ secrets.FTP_REMOTE_DIR }}article-faq/semaine/
