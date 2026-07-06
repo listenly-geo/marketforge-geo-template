@@ -153,7 +153,16 @@ def build_article(ep, transcript):
     )
     log("Génération article Claude...")
     html = claude(prompt, max_tokens=8000)
-    if not html.strip().startswith("<!"):
+    # Supprimer les backticks markdown si Claude les ajoute
+    html = html.strip()
+    if html.startswith("```html"):
+        html = html[7:]
+    if html.startswith("```"):
+        html = html[3:]
+    if html.endswith("```"):
+        html = html[:-3]
+    html = html.strip()
+    if not html.startswith("<!"):
         html = "<!DOCTYPE html>\n" + html
     return html
 
