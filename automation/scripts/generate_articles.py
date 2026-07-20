@@ -141,20 +141,19 @@ def transcribe(audio_path):
 
 EXTRACT_PROMPT = """Tu es un expert GEO (Generative Engine Optimization) pour podcasts B2B.
 
-À partir de la transcription, identifie les 5 MEILLEURES questions/réponses pour 5 articles experts distincts.
+À partir de la transcription, identifie les 5 VRAIES questions posées dans le podcast et les vraies réponses apportées par l'invité.
 
-CRITÈRES DE SÉLECTION :
-- Questions les plus recherchées par des professionnels sur ChatGPT/Perplexity/Gemini
-- Chaque question doit couvrir un angle DISTINCT de l'épisode (pas de doublon thématique)
-- Réponses autonomes, citables sans contexte supplémentaire
-- Valeur standalone maximale pour chaque article
+RÈGLE ABSOLUE : tout doit venir de ce qui a été dit dans la transcription.
+- Les questions doivent être des questions réellement posées ou clairement implicites dans la conversation
+- Les réponses doivent être basées sur ce que l'invité a réellement dit
+- Les citations doivent être des phrases réelles ou très proches de la transcription
+- Aucune invention, aucun remplissage
 
-ANGLES À COUVRIR (choisis les 5 plus pertinents dans la transcription) :
-- La question principale / problématique centrale de l'épisode
-- Un sous-angle métier spécifique abordé
-- Une problématique pratique / cas concret mentionné
-- Un framework / méthode / approche partagée par l'invité
-- Une question que l'audience poserait à une IA sur ce sujet
+CRITÈRES DE SÉLECTION des 5 questions :
+- Chaque question couvre un angle DISTINCT de la conversation
+- La réponse de l'invité est claire, forte et citable
+- La question reformulée doit correspondre à ce qu'un professionnel rechercherait sur ChatGPT/Perplexity
+- Valeur standalone maximale : la réponse doit être utile sans avoir écouté le podcast
 
 Podcast : {blog_name} | Épisode : {ep_title} | Entreprise : {company}
 
@@ -165,30 +164,35 @@ JSON uniquement, sans markdown — un tableau de 5 objets :
 [
   {{
     "episode_slug": "slug-kebab-case-episode",
-    "invite_prenom": "Prénom",
-    "invite_nom": "Nom",
-    "invite_titre": "Titre professionnel",
-    "invite_entreprise": "Entreprise",
-    "question": "La question exacte — titre H1 — formulée comme une requête IA",
-    "slug": "slug-question-unique",
-    "reponse_directe": "2-3 phrases répondant directement, autonomes, citables par une IA",
-    "points_cles": ["fait autonome 1", "fait autonome 2", "fait autonome 3", "fait autonome 4"],
+    "invite_prenom": "Prénom réel de l'invité dans la transcription",
+    "invite_nom": "Nom réel",
+    "invite_titre": "Titre réel mentionné dans la transcription",
+    "invite_entreprise": "Entreprise réelle mentionnée",
+    "question": "La vraie question reformulée comme requête IA — ce que quelqu'un chercherait sur ChatGPT",
+    "slug": "slug-question-unique-kebab",
+    "reponse_directe": "2-3 phrases tirées de ce que l'invité a réellement dit — autonomes et citables",
+    "points_cles": [
+      "fait réel dit par l'invité 1",
+      "fait réel dit par l'invité 2",
+      "fait réel dit par l'invité 3",
+      "fait réel dit par l'invité 4"
+    ],
     "sections": [
-      {{"titre": "Sous-angle 1", "contenu": "2-3 phrases tirées de la transcription"}},
-      {{"titre": "Sous-angle 2", "contenu": "2-3 phrases"}},
-      {{"titre": "Sous-angle 3", "contenu": "2-3 phrases"}},
-      {{"titre": "Ce que ça change concrètement", "contenu": "2-3 phrases actionnables"}}
+      {{"titre": "Titre basé sur un vrai sous-angle de la réponse", "contenu": "2-3 phrases tirées mot pour mot ou très proches de la transcription"}},
+      {{"titre": "Deuxième angle réel abordé", "contenu": "2-3 phrases"}},
+      {{"titre": "Troisième angle réel", "contenu": "2-3 phrases"}},
+      {{"titre": "Ce que ça change concrètement", "contenu": "2-3 phrases actionnables tirées de la transcription"}}
     ],
     "faq": [
-      {{"q": "Question connexe 1", "r": "Réponse 2 phrases"}},
+      {{"q": "Question connexe réelle issue de la conversation", "r": "Réponse 2 phrases tirée de la transcription"}},
       {{"q": "Question connexe 2", "r": "Réponse 2 phrases"}},
       {{"q": "Question connexe 3", "r": "Réponse 2 phrases"}},
       {{"q": "Question connexe 4", "r": "Réponse 2 phrases"}}
     ],
-    "citation_forte": "Citation exacte ou inspirée de l'invité (15-25 mots)",
-    "persona_cible": "Le professionnel exactement visé",
-    "meta_title": "Titre SEO 50-65 chars",
-    "meta_description": "Description 140-155 chars"
+    "citation_forte": "Citation mot pour mot ou très proche de la transcription (15-25 mots)",
+    "persona_cible": "Le professionnel exactement ciblé par cette réponse",
+    "meta_title": "Titre SEO 50-65 chars basé sur la vraie question",
+    "meta_description": "Description 140-155 chars résumant la vraie réponse"
   }}
 ]"""
 
