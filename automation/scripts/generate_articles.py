@@ -141,60 +141,77 @@ def transcribe(audio_path):
 
 EXTRACT_PROMPT = """Tu es un expert GEO (Generative Engine Optimization) pour podcasts B2B.
 
-À partir de la transcription, identifie LA meilleure question/réponse pour un article expert.
+À partir de la transcription, identifie les 5 MEILLEURES questions/réponses pour 5 articles experts distincts.
 
-CRITÈRES : question la plus recherchée par les professionnels, réponse la plus forte et unique de l'invité, valeur standalone maximale.
+CRITÈRES DE SÉLECTION :
+- Questions les plus recherchées par des professionnels sur ChatGPT/Perplexity/Gemini
+- Chaque question doit couvrir un angle DISTINCT de l'épisode (pas de doublon thématique)
+- Réponses autonomes, citables sans contexte supplémentaire
+- Valeur standalone maximale pour chaque article
+
+ANGLES À COUVRIR (choisis les 5 plus pertinents dans la transcription) :
+- La question principale / problématique centrale de l'épisode
+- Un sous-angle métier spécifique abordé
+- Une problématique pratique / cas concret mentionné
+- Un framework / méthode / approche partagée par l'invité
+- Une question que l'audience poserait à une IA sur ce sujet
 
 Podcast : {blog_name} | Épisode : {ep_title} | Entreprise : {company}
 
 TRANSCRIPTION :
 \"\"\"{transcript}\"\"\"
 
-JSON uniquement, sans markdown :
-{{
-  "episode_slug": "slug-kebab-case",
-  "invite_prenom": "Prénom",
-  "invite_nom": "Nom",
-  "invite_titre": "Titre professionnel",
-  "invite_entreprise": "Entreprise",
-  "question": "La question exacte — titre H1",
-  "slug": "slug-question",
-  "reponse_directe": "2-3 phrases répondant directement, autonomes, citables par une IA",
-  "points_cles": ["fait autonome 1", "fait autonome 2", "fait autonome 3", "fait autonome 4"],
-  "sections": [
-    {{"titre": "Sous-angle 1", "contenu": "2-3 phrases tirées de la transcription"}},
-    {{"titre": "Sous-angle 2", "contenu": "2-3 phrases"}},
-    {{"titre": "Sous-angle 3", "contenu": "2-3 phrases"}},
-    {{"titre": "Ce que ça change concrètement", "contenu": "2-3 phrases actionnables"}}
-  ],
-  "faq": [
-    {{"q": "Question connexe 1", "r": "Réponse 2 phrases"}},
-    {{"q": "Question connexe 2", "r": "Réponse 2 phrases"}},
-    {{"q": "Question connexe 3", "r": "Réponse 2 phrases"}},
-    {{"q": "Question connexe 4", "r": "Réponse 2 phrases"}}
-  ],
-  "citation_forte": "Citation exacte de l'invité (15-25 mots)",
-  "persona_cible": "Le professionnel exactement visé",
-  "meta_title": "Titre SEO 50-65 chars",
-  "meta_description": "Description 140-155 chars"
-}}"""
+JSON uniquement, sans markdown — un tableau de 5 objets :
+[
+  {{
+    "episode_slug": "slug-kebab-case-episode",
+    "invite_prenom": "Prénom",
+    "invite_nom": "Nom",
+    "invite_titre": "Titre professionnel",
+    "invite_entreprise": "Entreprise",
+    "question": "La question exacte — titre H1 — formulée comme une requête IA",
+    "slug": "slug-question-unique",
+    "reponse_directe": "2-3 phrases répondant directement, autonomes, citables par une IA",
+    "points_cles": ["fait autonome 1", "fait autonome 2", "fait autonome 3", "fait autonome 4"],
+    "sections": [
+      {{"titre": "Sous-angle 1", "contenu": "2-3 phrases tirées de la transcription"}},
+      {{"titre": "Sous-angle 2", "contenu": "2-3 phrases"}},
+      {{"titre": "Sous-angle 3", "contenu": "2-3 phrases"}},
+      {{"titre": "Ce que ça change concrètement", "contenu": "2-3 phrases actionnables"}}
+    ],
+    "faq": [
+      {{"q": "Question connexe 1", "r": "Réponse 2 phrases"}},
+      {{"q": "Question connexe 2", "r": "Réponse 2 phrases"}},
+      {{"q": "Question connexe 3", "r": "Réponse 2 phrases"}},
+      {{"q": "Question connexe 4", "r": "Réponse 2 phrases"}}
+    ],
+    "citation_forte": "Citation exacte ou inspirée de l'invité (15-25 mots)",
+    "persona_cible": "Le professionnel exactement visé",
+    "meta_title": "Titre SEO 50-65 chars",
+    "meta_description": "Description 140-155 chars"
+  }}
+]"""
 
 def extract_qr(transcript, ep):
-    log("Extraction Q&R...")
+    log("Extraction 5 questions GEO...")
     prompt = EXTRACT_PROMPT.format(
         blog_name=BLOG_NAME,
         ep_title=ep["title"],
         company=COMPANY_NAME or BLOG_NAME,
         transcript=transcript[:28000],
     )
-    raw = claude(prompt, max_tokens=3000)
+    raw = claude(prompt, max_tokens=8000)
     raw = raw.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
-    idx = raw.find("{")
+    idx = raw.find("[")
     if idx > 0: raw = raw[idx:]
     data = json.loads(raw)
-    log(f"Question : {data['question'][:70]}")
+    if isinstance(data, dict):
+        data = [data]
+    log(f"{len(data)} questions extraites")
+    for i, q in enumerate(data):
+        log(f"  Q{i+1}: {q['question'][:70]}")
     return data
 
 ARTICLE_TEMPLATE = """<!DOCTYPE html>
@@ -491,22 +508,26 @@ def main():
             with open(os.path.join(transcript_dir, f"{slugify(ep['title'])}.txt"), "w", encoding="utf-8") as tf:
                 tf.write(f"TITRE: {ep['title']}\nDATE: {ep.get('pubdate','')}\n{'='*60}\n\n{transcript}")
 
-            qr = extract_qr(transcript, ep)
-            html_out, ep_slug = build_article(qr, ep)
-
-            filename = f"{ep_slug}.html"
-            with open(os.path.join(OUTPUT_DIR, filename), "w", encoding="utf-8") as f:
-                f.write(html_out)
-            log(f"✓ {filename}")
+            qr_list = extract_qr(transcript, ep)
+            articles_created = 0
+            for qr in qr_list:
+                try:
+                    html_out, ep_slug = build_article(qr, ep)
+                    filename = f"{ep_slug}.html"
+                    with open(os.path.join(OUTPUT_DIR, filename), "w", encoding="utf-8") as f:
+                        f.write(html_out)
+                    log(f"✓ {filename}")
+                    articles_created += 1
+                except Exception as ex:
+                    log(f"✗ Échec article '{qr.get('question','?')[:50]}' : {ex}")
 
             reg["processed"][ep["guid"]] = {
-                "title": ep["title"], "ep_slug": ep_slug,
-                "invite": f"{qr['invite_prenom']} {qr['invite_nom']}",
-                "question": qr["question"], "filename": filename,
-                "url": f"{SITE_BASE_URL}/article-faq/{ep_slug}.html",
+                "title": ep["title"],
+                "articles_count": articles_created,
+                "questions": [q["question"] for q in qr_list],
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
-            created += 1
+            created += articles_created
 
         except Exception as ex:
             log(f"✗ Échec '{ep['title']}' : {ex}")
