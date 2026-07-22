@@ -1,0 +1,57 @@
+name: MarketForge GEO - Generate Hub
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_episodes:
+        description: "Nombre max d'épisodes à traiter (défaut: 3)"
+        required: false
+        default: "3"
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests --break-system-packages
+
+      - name: Install ffmpeg
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Generate Hub
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          RSS_URL: ${{ vars.RSS_URL }}
+          BLOG_NAME: ${{ vars.BLOG_NAME }}
+          COMPANY_NAME: ${{ vars.COMPANY_NAME }}
+          PODCAST_URL: ${{ vars.PODCAST_URL }}
+          CONTACT_URL: ${{ vars.CONTACT_URL }}
+          LISTENLY_PODCAST_URL: ${{ vars.LISTENLY_PODCAST_URL }}
+          SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
+          ACCENT_COLOR: ${{ vars.ACCENT_COLOR }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+          MAX_EPISODES: ${{ github.event.inputs.max_episodes }}
+          OUTPUT_DIR: hub
+        run: python automation/scripts/generate_hub.py
+
+      - name: Deploy Hub via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./hub/
+          server-dir: ${{ vars.FTP_SERVER_DIR }}hub/
+          exclude: |
+            **/.git*
+            **/.git*/**
