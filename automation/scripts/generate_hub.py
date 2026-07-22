@@ -22,6 +22,7 @@ LISTENLY_PODCAST_URL = os.environ.get("LISTENLY_PODCAST_URL", "https://listenly.
 SITE_BASE_URL        = os.environ.get("SITE_BASE_URL", "")
 ACCENT_COLOR         = os.environ.get("ACCENT_COLOR", "#2e8bd6")
 PODCAST_DESCRIPTION = os.environ.get("PODCAST_DESCRIPTION", "")
+GITHUB_TOKEN         = os.environ.get("GH_TOKEN", "")  # GH_TOKEN pour éviter conflit avec variable réservée GitHub
 GITHUB_REPO          = os.environ.get("GITHUB_REPO", "")  # ex: listenly-geo/pause-rh
 OUTPUT_DIR           = os.environ.get("OUTPUT_DIR", "hub")
 MAX_EPISODES         = int(os.environ.get("MAX_EPISODES", "3"))
@@ -126,7 +127,7 @@ def transcribe(audio_path):
 
 def load_hub_index():
     if not GITHUB_TOKEN or not GITHUB_REPO:
-        log("⚠ GITHUB_TOKEN ou GITHUB_REPO manquant — index local vide")
+        log("⚠ GH_TOKEN ou GITHUB_REPO manquant — index local vide")
         return {"_meta": {}, "questions": [], "experts": [], "concepts": [],
                 "quotes": [], "statistics": [], "categories": [], "resources": [], "episodes": []}, None
     try:
