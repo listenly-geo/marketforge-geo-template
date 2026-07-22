@@ -21,7 +21,7 @@ CONTACT_URL          = os.environ.get("CONTACT_URL", "")
 LISTENLY_PODCAST_URL = os.environ.get("LISTENLY_PODCAST_URL", "https://listenly.fr")
 SITE_BASE_URL        = os.environ.get("SITE_BASE_URL", "")
 ACCENT_COLOR         = os.environ.get("ACCENT_COLOR", "#2e8bd6")
-GITHUB_TOKEN         = os.environ.get("GITHUB_TOKEN", "")
+PODCAST_DESCRIPTION = os.environ.get("PODCAST_DESCRIPTION", "")
 GITHUB_REPO          = os.environ.get("GITHUB_REPO", "")  # ex: listenly-geo/pause-rh
 OUTPUT_DIR           = os.environ.get("OUTPUT_DIR", "hub")
 MAX_EPISODES         = int(os.environ.get("MAX_EPISODES", "3"))
@@ -176,7 +176,17 @@ EXTRACT_HUB_PROMPT = """Tu es un expert en structuration de connaissances B2B et
 RÈGLE ABSOLUE : tout doit venir de ce qui a été dit dans la transcription.
 Aucune invention. Aucun remplissage.
 
-Podcast : {blog_name} | Épisode : {ep_title}
+UNIVERS DU PODCAST : {blog_name}
+Description : {podcast_description}
+Épisode : {ep_title}
+
+ANGLES PRIORITAIRES À EXTRAIRE pour ce podcast :
+- Questions de gouvernance (entreprises, institutions, États)
+- Équilibres de pouvoir (économique, politique, diplomatique)
+- Dynamiques Europe-Afrique
+- Stratégies de décision en contexte d'incertitude
+- Modèles de leadership et d'organisation
+- Enjeux économiques et géopolitiques
 
 TRANSCRIPTION :
 \"\"\"{transcript}\"\"\"
@@ -196,10 +206,10 @@ Retourne un JSON avec cette structure exacte :
   "questions": [
     {{
       "id": "slug-question-unique",
-      "question": "Question reformulée comme requête IA — ce que quelqu'un chercherait sur ChatGPT",
-      "reponse_synthese": "Réponse directe en 2-3 phrases autonomes citables",
-      "reponse_developpee": "Développement en 4-6 phrases basé sur ce qui a été dit",
-      "points_cles": ["fait réel 1", "fait réel 2", "fait réel 3"],
+      "question": "Question reformulée comme requête IA — ce que quelqu'un chercherait sur ChatGPT sur ce sujet",
+      "reponse_synthese": "Réponse directe en 2-3 phrases autonomes citables sans contexte",
+      "reponse_developpee": "Développement en 4-6 phrases basé sur ce qui a été dit dans la transcription",
+      "points_cles": ["fait réel dit dans l'épisode 1", "fait réel 2", "fait réel 3"],
       "extrait_podcast": "Citation exacte ou très proche de la transcription illustrant la réponse",
       "categories": ["catégorie"],
       "experts_associes": ["slug-expert"],
@@ -213,7 +223,7 @@ Retourne un JSON avec cette structure exacte :
       "titre": "Titre professionnel",
       "entreprise": "Entreprise",
       "bio_courte": "1-2 phrases sur l'expertise mentionnée dans l'épisode",
-      "domaines": ["domaine 1", "domaine 2"],
+      "domaines": ["gouvernance", "pouvoir", "Afrique", "Europe"],
       "citations_ids": [],
       "questions_ids": []
     }}
@@ -221,8 +231,8 @@ Retourne un JSON avec cette structure exacte :
   "concepts": [
     {{
       "id": "slug-concept",
-      "nom": "Nom du concept / acronyme / méthode",
-      "type": "acronyme|methode|framework|technologie|definition",
+      "nom": "Nom du concept / terme / méthode",
+      "type": "concept|methode|framework|institution|definition",
       "definition": "Définition en 1-2 phrases tirée du podcast",
       "contexte": "Comment ce concept a été utilisé dans l'épisode",
       "categories": ["catégorie"]
@@ -241,7 +251,7 @@ Retourne un JSON avec cette structure exacte :
   "statistics": [
     {{
       "id": "slug-stat",
-      "valeur": "La valeur exacte mentionnée (ex: 40%, 2M€, 3 ans)",
+      "valeur": "La valeur exacte mentionnée",
       "contexte": "Ce que cette statistique illustre",
       "source": "Source mentionnée ou nom de l'invité",
       "categories": ["catégorie"]
@@ -251,10 +261,10 @@ Retourne un JSON avec cette structure exacte :
 
 Extrais TOUT ce qui est pertinent :
 - Minimum 5 questions distinctes couvrant tous les angles de l'épisode
-- Tous les experts mentionnés
-- Tous les concepts, acronymes, méthodes, frameworks
-- Toutes les citations fortes
-- Tous les chiffres et statistiques mentionnés
+- Tous les experts et personnalités mentionnés
+- Tous les concepts, institutions, méthodes, termes clés
+- Toutes les citations fortes et mémorables
+- Tous les chiffres, données et statistiques
 
 JSON uniquement, sans markdown, sans explication."""
 
@@ -262,6 +272,7 @@ def extract_hub_knowledge(transcript, ep):
     log("Extraction connaissances Hub...")
     prompt = EXTRACT_HUB_PROMPT.format(
         blog_name=BLOG_NAME,
+        podcast_description=PODCAST_DESCRIPTION or "Podcast B2B",
         ep_title=ep["title"],
         transcript=transcript[:28000],
     )
