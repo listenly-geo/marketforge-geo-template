@@ -50,7 +50,12 @@ def claude(prompt, max_tokens=8000):
 
 def fetch_rss():
     log(f"RSS : {RSS_URL}")
-    r = requests.get(RSS_URL, timeout=30, headers={"User-Agent": "MarketForgeHub/1.0"})
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    }
+    r = requests.get(RSS_URL, timeout=30, headers=headers)
     r.raise_for_status()
     root = ET.fromstring(r.content)
     channel = root.find("channel")
@@ -81,7 +86,7 @@ def fetch_rss():
 
 def download_audio(url, dest):
     log("Téléchargement audio...")
-    with requests.get(url, stream=True, timeout=120, headers={"User-Agent": "MarketForgeHub/1.0"}) as r:
+    with requests.get(url, stream=True, timeout=120, headers={"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"}) as r:
         r.raise_for_status()
         with open(dest, "wb") as f:
             for chunk in r.iter_content(chunk_size=1 << 16):
